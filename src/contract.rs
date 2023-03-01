@@ -10,7 +10,7 @@ use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::sha_256;
 
 use crate::batch;
-use crate::msg::QueryWithPermit;
+use crate::msg::{QueryWithPermit, AllowanceResult, AllowedResult};
 use crate::msg::{
     ContractStatusLevel, ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg,
     ResponseStatus::Success,
@@ -337,6 +337,24 @@ fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<
 
             query_allowance(deps, owner, spender)
         }
+        QueryWithPermit::AllAllowances { owner, page, page_size } => {
+            if !permit.check_permission(&TokenPermissions::Allowance) {
+                return Err(StdError::generic_err(format!(
+                    "No permission to query all allowances, got permissions {:?}",
+                    permit.params.permissions
+                )));
+            }
+            query_all_allowances(deps, owner, page.unwrap_or(0), page_size)
+        }
+        QueryWithPermit::AllAllowed { spender, page, page_size } => {
+            if !permit.check_permission(&TokenPermissions::Allowance) {
+                return Err(StdError::generic_err(format!(
+                    "No permission to query all allowed, got permissions {:?}",
+                    permit.params.permissions
+                )));
+            }
+            query_all_allowed(deps, spender, page.unwrap_or(0), page_size)  
+        }
     }
 }
 
@@ -362,6 +380,18 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
                     ..
                 } => query_transactions(deps, address, page.unwrap_or(0), page_size),
                 QueryMsg::Allowance { owner, spender, .. } => query_allowance(deps, owner, spender),
+                QueryMsg::AllAllowances { 
+                    owner, 
+                    page, 
+                    page_size, 
+                    .. 
+                } => query_all_allowances(deps, owner, page.unwrap_or(0), page_size),
+                QueryMsg::AllAllowed { 
+                    spender, 
+                    page, 
+                    page_size, 
+                    .. 
+                } => query_all_allowed(deps, spender, page.unwrap_or(0), page_size),
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -715,7 +745,7 @@ fn set_contract_status(
 }
 
 pub fn query_allowance(deps: Deps, owner: String, spender: String) -> StdResult<Binary> {
-    // Notice that if query_allowance() was called by a viewking-key call, the addresses of 'owner'
+    // Notice that if query_allowance() was called by a viewing-key call, the addresses of 'owner'
     // and 'spender' have already been validated.
     // The addresses of 'owner' and 'spender' should not be validated if query_allowance() was
     // called by a permit call, for compatibility with non-Secret addresses.
@@ -729,6 +759,56 @@ pub fn query_allowance(deps: Deps, owner: String, spender: String) -> StdResult<
         spender,
         allowance: Uint128::new(allowance.amount),
         expiration: allowance.expiration,
+    };
+    to_binary(&response)
+}
+
+pub fn query_all_allowances(deps: Deps, owner: String, page: u32, page_size: u32) -> StdResult<Binary> {
+    // Notice that if query_all_allowances() was called by a viewing-key call, 
+    // the address of 'owner' has already been validated.
+    // The addresses of 'owner' should not be validated if query_all_allowances() was
+    // called by a permit call, for compatibility with non-Secret addresses.
+    let owner = Addr::unchecked(owner);
+
+    let all_allowances = AllowancesStore::all_allowances(deps.storage, &owner, page, page_size)?;
+
+    let allowances_result = all_allowances.into_iter().map(|(spender, allowance)| {
+        AllowanceResult {
+            spender,
+            allowance: Uint128::from(allowance.amount),
+            expiration: allowance.expiration,
+        }
+    }).collect();
+
+    let response = QueryAnswer::AllAllowances { 
+        owner: owner.clone(),
+        allowances: allowances_result, 
+        count: AllowancesStore::num_allowances(deps.storage, &owner), 
+    };
+    to_binary(&response)
+}
+
+pub fn query_all_allowed(deps: Deps, spender: String, page: u32, page_size: u32) -> StdResult<Binary> {
+    // Notice that if query_all_allowed() was called by a viewing-key call, 
+    // the address of 'spender' has already been validated.
+    // The addresses of 'spender' should not be validated if query_all_allowed() was
+    // called by a permit call, for compatibility with non-Secret addresses.
+    let spender = Addr::unchecked(spender);
+
+    let all_allowed = AllowancesStore::all_allowed(deps.storage, &spender, page, page_size)?;
+
+    let allowances = all_allowed.into_iter().map(|(owner, allowance)| {
+        AllowedResult {
+            owner,
+            allowance: Uint128::from(allowance.amount),
+            expiration: allowance.expiration,
+        }
+    }).collect();
+
+    let response = QueryAnswer::AllAllowed { 
+        spender: spender.clone(),
+        allowances, 
+        count: AllowancesStore::num_allowed(deps.storage, &spender), 
     };
     to_binary(&response)
 }
