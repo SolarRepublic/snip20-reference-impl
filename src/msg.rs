@@ -353,13 +353,13 @@ pub enum QueryMsg {
         spender: String,
         key: String,
     },
-    AllAllowances {
+    AllowancesGiven {
         owner: String,
         key: String,
         page: Option<u32>,
         page_size: u32,
     },
-    AllAllowed {
+    AllowancesReceived {
         spender: String,
         key: String,
         page: Option<u32>,
@@ -414,11 +414,11 @@ impl QueryMsg {
 
                 Ok((vec![owner, spender], key.clone()))
             }
-            Self::AllAllowances { owner, key, .. } => {
+            Self::AllowancesGiven { owner, key, .. } => {
                 let owner = api.addr_validate(owner.as_str())?;
                 Ok((vec![owner], key.clone()))
             }
-            Self::AllAllowed { spender, key, .. } => {
+            Self::AllowancesReceived { spender, key, .. } => {
                 let spender = api.addr_validate(spender.as_str())?;
                 Ok((vec![spender], key.clone()))
             }
@@ -432,8 +432,8 @@ impl QueryMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryWithPermit {
     Allowance { owner: String, spender: String },
-    AllAllowances { owner: String, page: Option<u32>, page_size: u32 },
-    AllAllowed { spender: String, page: Option<u32>, page_size: u32 },
+    AllowancesGiven { owner: String, page: Option<u32>, page_size: u32 },
+    AllowancesReceived { spender: String, page: Option<u32>, page_size: u32 },
     Balance {},
     TransferHistory { page: Option<u32>, page_size: u32 },
     TransactionHistory { page: Option<u32>, page_size: u32 },
@@ -469,14 +469,14 @@ pub enum QueryAnswer {
         allowance: Uint128,
         expiration: Option<u64>,
     },
-    AllAllowances {
+    AllowancesGiven {
         owner: Addr,
-        allowances: Vec<AllowanceResult>,
+        allowances: Vec<AllowanceGivenResult>,
         count: u32,
     },
-    AllAllowed {
+    AllowancesReceived {
         spender: Addr,
-        allowances: Vec<AllowedResult>,
+        allowances: Vec<AllowanceReceivedResult>,
         count: u32,
     },
     Balance {
@@ -499,14 +499,14 @@ pub enum QueryAnswer {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
-pub struct AllowanceResult {
+pub struct AllowanceGivenResult {
     pub spender: Addr,
     pub allowance: Uint128,
     pub expiration: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
-pub struct AllowedResult {
+pub struct AllowanceReceivedResult {
     pub owner: Addr,
     pub allowance: Uint128,
     pub expiration: Option<u64>,
