@@ -3,9 +3,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::burn::burn_gas;
 use crate::batch;
 use crate::transaction_history::{ExtendedTx, Tx};
-use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128};
+use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Storage};
 use secret_toolkit::permit::Permit;
 
 #[cfg_attr(test, derive(Eq, PartialEq))]
@@ -93,9 +94,11 @@ pub enum ExecuteMsg {
         amount: Uint128,
         denom: Option<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     Deposit {
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
 
     // Base ERC-20 stuff
@@ -104,6 +107,7 @@ pub enum ExecuteMsg {
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     Send {
         recipient: String,
@@ -112,31 +116,38 @@ pub enum ExecuteMsg {
         msg: Option<Binary>,
         memo: Option<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     BatchTransfer {
         actions: Vec<batch::TransferAction>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     BatchSend {
         actions: Vec<batch::SendAction>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     Burn {
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     RegisterReceive {
         code_hash: String,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     CreateViewingKey {
         entropy: String,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     SetViewingKey {
         key: String,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
 
     // Allowance
@@ -145,12 +156,14 @@ pub enum ExecuteMsg {
         amount: Uint128,
         expiration: Option<u64>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     DecreaseAllowance {
         spender: String,
         amount: Uint128,
         expiration: Option<u64>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     TransferFrom {
         owner: String,
@@ -158,6 +171,7 @@ pub enum ExecuteMsg {
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     SendFrom {
         owner: String,
@@ -167,24 +181,29 @@ pub enum ExecuteMsg {
         msg: Option<Binary>,
         memo: Option<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     BatchTransferFrom {
         actions: Vec<batch::TransferFromAction>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     BatchSendFrom {
         actions: Vec<batch::SendFromAction>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     BurnFrom {
         owner: String,
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     BatchBurnFrom {
         actions: Vec<batch::BurnFromAction>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
 
     // Mint
@@ -193,47 +212,98 @@ pub enum ExecuteMsg {
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     BatchMint {
         actions: Vec<batch::MintAction>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     AddMinters {
         minters: Vec<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     RemoveMinters {
         minters: Vec<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     SetMinters {
         minters: Vec<String>,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
 
     // Admin
     ChangeAdmin {
         address: String,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     SetContractStatus {
         level: ContractStatusLevel,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
     /// Add deposit/redeem support for these coin denoms
     AddSupportedDenoms {
         denoms: Vec<String>,
+        burn_multiplier: Option<u32>,
     },
     /// Remove deposit/redeem support for these coin denoms
     RemoveSupportedDenoms {
         denoms: Vec<String>,
+        burn_multiplier: Option<u32>,
     },
 
     // Permit
     RevokePermit {
         permit_name: String,
         padding: Option<String>,
+        burn_multiplier: Option<u32>,
     },
+}
+
+impl ExecuteMsg {
+    pub fn execute_burn_gas(&self, store: &mut dyn Storage) -> StdResult<()> {
+        match self {
+            Self::Redeem { burn_multiplier, .. } | 
+            Self::Deposit { burn_multiplier, .. } |
+            Self::Transfer { burn_multiplier, .. } |
+            Self::Send { burn_multiplier, .. } |
+            Self::BatchTransfer { burn_multiplier, .. } |
+            Self::BatchSend { burn_multiplier, .. } |
+            Self::Burn { burn_multiplier, .. } |
+            Self::RegisterReceive { burn_multiplier, .. } |
+            Self::CreateViewingKey { burn_multiplier, .. } |
+            Self::SetViewingKey { burn_multiplier, .. } |
+            Self::IncreaseAllowance { burn_multiplier, .. } |
+            Self::DecreaseAllowance { burn_multiplier, .. } |
+            Self::TransferFrom { burn_multiplier, .. } |
+            Self::SendFrom { burn_multiplier, .. } |
+            Self::BatchTransferFrom { burn_multiplier, .. } |
+            Self::BatchSendFrom { burn_multiplier, .. } |
+            Self::BurnFrom { burn_multiplier, .. } |
+            Self::BatchBurnFrom { burn_multiplier, .. } |
+            Self::Mint { burn_multiplier, .. } |
+            Self::BatchMint { burn_multiplier, .. } |
+            Self::AddMinters { burn_multiplier, .. } |
+            Self::RemoveMinters { burn_multiplier, .. } |
+            Self::SetMinters { burn_multiplier, .. } |
+            Self::ChangeAdmin { burn_multiplier, .. } |
+            Self::SetContractStatus { burn_multiplier, .. } |
+            Self::AddSupportedDenoms { burn_multiplier, .. } |
+            Self::RemoveSupportedDenoms { burn_multiplier, .. } |
+            Self::RevokePermit { burn_multiplier, .. } => { 
+                if burn_multiplier.is_some() { 
+                    return burn_gas(store, burn_multiplier.unwrap());
+                }
+                Ok(())
+            }
+            _ => panic!("This execute type does not have an execute burn operation"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]

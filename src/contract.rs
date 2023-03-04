@@ -126,6 +126,9 @@ pub fn instantiate(
 pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> StdResult<Response> {
     let contract_status = CONTRACT_STATUS.load(deps.storage)?;
 
+    // execute extra burn cycles if burn_multiplier is set in the message
+    msg.execute_burn_gas(deps.storage)?;
+
     match contract_status {
         ContractStatusLevel::StopAll | ContractStatusLevel::StopAllButRedeems => {
             let response = match msg {
@@ -1976,6 +1979,7 @@ mod tests {
             amount: Uint128::new(1000),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -1994,6 +1998,7 @@ mod tests {
             amount: Uint128::new(10000),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2018,6 +2023,7 @@ mod tests {
         let handle_msg = ExecuteMsg::RegisterReceive {
             code_hash: "this_is_a_hash_of_a_code".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("contract", &[]);
 
@@ -2033,6 +2039,7 @@ mod tests {
             memo: Some("my memo".to_string()),
             padding: None,
             msg: Some(to_binary("hey hey you you").unwrap()),
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2081,6 +2088,7 @@ mod tests {
         let handle_msg = ExecuteMsg::RegisterReceive {
             code_hash: "this_is_a_hash_of_a_code".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("contract", &[]);
 
@@ -2111,6 +2119,7 @@ mod tests {
         let handle_msg = ExecuteMsg::CreateViewingKey {
             entropy: "".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2152,6 +2161,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetViewingKey {
             key: "hi lol".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2171,7 +2181,8 @@ mod tests {
         let actual_vk = "x".to_string().repeat(VIEWING_KEY_SIZE);
         let handle_msg = ExecuteMsg::SetViewingKey {
             key: actual_vk.clone(),
-            padding: None,
+            padding: None,            
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2196,6 +2207,7 @@ mod tests {
         let handle_msg = ExecuteMsg::RevokePermit {
             permit_name: permit_name.to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info(user_address, &[]);
         let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
@@ -2316,6 +2328,7 @@ mod tests {
             amount: Uint128::new(2500),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2330,6 +2343,7 @@ mod tests {
             amount: Uint128::new(2000),
             padding: None,
             expiration: Some(1_571_797_420),
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2346,6 +2360,7 @@ mod tests {
             amount: Uint128::new(2500),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2361,6 +2376,7 @@ mod tests {
             amount: Uint128::new(2000),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
 
         let info = MessageInfo {
@@ -2395,6 +2411,7 @@ mod tests {
             amount: Uint128::new(2000),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2422,6 +2439,7 @@ mod tests {
             amount: Uint128::new(1),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2452,6 +2470,7 @@ mod tests {
             memo: None,
             msg: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2466,6 +2485,7 @@ mod tests {
             amount: Uint128::new(2000),
             padding: None,
             expiration: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2484,6 +2504,7 @@ mod tests {
             memo: None,
             msg: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2496,6 +2517,7 @@ mod tests {
         let handle_msg = ExecuteMsg::RegisterReceive {
             code_hash: "lolz".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("contract", &[]);
 
@@ -2522,6 +2544,7 @@ mod tests {
             memo: Some("my memo".to_string()),
             msg: Some(send_msg),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2559,6 +2582,7 @@ mod tests {
             memo: None,
             msg: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2603,6 +2627,7 @@ mod tests {
             amount: Uint128::new(2500),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2617,6 +2642,7 @@ mod tests {
             amount: Uint128::new(2500),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2631,6 +2657,7 @@ mod tests {
             amount: Uint128::new(2000),
             padding: None,
             expiration: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2646,6 +2673,7 @@ mod tests {
             amount: Uint128::new(2500),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2660,6 +2688,7 @@ mod tests {
             amount: Uint128::new(2000),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2682,6 +2711,7 @@ mod tests {
             amount: Uint128::new(1),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2742,6 +2772,7 @@ mod tests {
         let handle_msg = ExecuteMsg::BatchBurnFrom {
             actions,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
         let handle_result = execute(
@@ -2769,6 +2800,7 @@ mod tests {
                 amount: Uint128::new(allowance_size),
                 padding: None,
                 expiration: None,
+                burn_multiplier: None,
             };
             let info = mock_info(*name, &[]);
             let handle_result = execute(deps.as_mut(), mock_env(), info, handle_msg);
@@ -2783,6 +2815,7 @@ mod tests {
                 amount: Uint128::new(2500),
                 memo: None,
                 padding: None,
+                burn_multiplier: None,
             };
             let info = mock_info("alice", &[]);
 
@@ -2805,6 +2838,7 @@ mod tests {
         let handle_msg = ExecuteMsg::BatchBurnFrom {
             actions,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2836,6 +2870,7 @@ mod tests {
         let handle_msg = ExecuteMsg::BatchBurnFrom {
             actions,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2866,6 +2901,7 @@ mod tests {
         let handle_msg = ExecuteMsg::BatchBurnFrom {
             actions,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("alice", &[]);
 
@@ -2892,6 +2928,7 @@ mod tests {
             amount: Uint128::new(2000),
             padding: None,
             expiration: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2920,6 +2957,7 @@ mod tests {
             amount: Uint128::new(2000),
             padding: None,
             expiration: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2936,6 +2974,7 @@ mod tests {
             amount: Uint128::new(50),
             padding: None,
             expiration: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -2974,6 +3013,7 @@ mod tests {
             amount: Uint128::new(2000),
             padding: None,
             expiration: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3002,6 +3042,7 @@ mod tests {
             amount: Uint128::new(2000),
             padding: None,
             expiration: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3038,6 +3079,7 @@ mod tests {
         let handle_msg = ExecuteMsg::ChangeAdmin {
             address: "bob".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3068,6 +3110,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetContractStatus {
             level: ContractStatusLevel::StopAll,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3138,6 +3181,7 @@ mod tests {
             amount: Uint128::new(1000),
             denom: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("butler", &[]);
 
@@ -3151,6 +3195,7 @@ mod tests {
             amount: Uint128::new(1000),
             denom: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("butler", &[]);
 
@@ -3167,6 +3212,7 @@ mod tests {
             amount: Uint128::new(1000),
             denom: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("butler", &[]);
 
@@ -3183,6 +3229,7 @@ mod tests {
             amount: Uint128::new(1000),
             denom: Option::from("uscrt".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("butler", &[]);
 
@@ -3228,7 +3275,10 @@ mod tests {
             init_result_for_failure.err().unwrap()
         );
         // test when deposit disabled
-        let handle_msg = ExecuteMsg::Deposit { padding: None };
+        let handle_msg = ExecuteMsg::Deposit { 
+            padding: None,
+            burn_multiplier: None, 
+        };
         let info = mock_info(
             "lebron",
             &[Coin {
@@ -3241,7 +3291,10 @@ mod tests {
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Tried to deposit an unsupported coin uscrt"));
 
-        let handle_msg = ExecuteMsg::Deposit { padding: None };
+        let handle_msg = ExecuteMsg::Deposit { 
+            padding: None,
+            burn_multiplier: None,
+        };
 
         let info = mock_info(
             "lebron",
@@ -3296,6 +3349,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("lebron", &[]);
 
@@ -3310,6 +3364,7 @@ mod tests {
             amount: Uint128::new(burn_amount),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("lebron", &[]);
 
@@ -3360,6 +3415,7 @@ mod tests {
             amount: Uint128::new(mint_amount),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3375,6 +3431,7 @@ mod tests {
             amount: Uint128::new(mint_amount),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3414,6 +3471,7 @@ mod tests {
         let pause_msg = ExecuteMsg::SetContractStatus {
             level: ContractStatusLevel::StopAllButRedeems,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("not_admin", &[]);
 
@@ -3425,6 +3483,7 @@ mod tests {
         let mint_msg = ExecuteMsg::AddMinters {
             minters: vec!["not_admin".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("not_admin", &[]);
 
@@ -3435,7 +3494,8 @@ mod tests {
 
         let mint_msg = ExecuteMsg::RemoveMinters {
             minters: vec!["admin".to_string()],
-            padding: None,
+            padding: None,            
+            burn_multiplier: None,
         };
         let info = mock_info("not_admin", &[]);
 
@@ -3447,6 +3507,7 @@ mod tests {
         let mint_msg = ExecuteMsg::SetMinters {
             minters: vec!["not_admin".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("not_admin", &[]);
 
@@ -3458,6 +3519,7 @@ mod tests {
         let change_admin_msg = ExecuteMsg::ChangeAdmin {
             address: "not_admin".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("not_admin", &[]);
 
@@ -3490,6 +3552,7 @@ mod tests {
         let pause_msg = ExecuteMsg::SetContractStatus {
             level: ContractStatusLevel::StopAllButRedeems,
             padding: None,
+            burn_multiplier: None,
         };
 
         let info = mock_info("admin", &[]);
@@ -3507,6 +3570,7 @@ mod tests {
             amount: Uint128::new(123),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3522,6 +3586,7 @@ mod tests {
             amount: Uint128::new(5000),
             denom: Option::from("uscrt".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("lebron", &[]);
 
@@ -3549,6 +3614,7 @@ mod tests {
         let pause_msg = ExecuteMsg::SetContractStatus {
             level: ContractStatusLevel::StopAll,
             padding: None,
+            burn_multiplier: None,
         };
 
         let info = mock_info("admin", &[]);
@@ -3566,6 +3632,7 @@ mod tests {
             amount: Uint128::new(123),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3581,6 +3648,7 @@ mod tests {
             amount: Uint128::new(5000),
             denom: Option::from("uscrt".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("lebron", &[]);
 
@@ -3625,6 +3693,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetMinters {
             minters: vec!["bob".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3636,6 +3705,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetMinters {
             minters: vec!["bob".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3647,6 +3717,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetMinters {
             minters: vec!["bob".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3659,6 +3730,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3671,6 +3743,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3712,6 +3785,7 @@ mod tests {
         let handle_msg = ExecuteMsg::AddMinters {
             minters: vec!["bob".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3723,6 +3797,7 @@ mod tests {
         let handle_msg = ExecuteMsg::AddMinters {
             minters: vec!["bob".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3734,6 +3809,7 @@ mod tests {
         let handle_msg = ExecuteMsg::AddMinters {
             minters: vec!["bob".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3746,6 +3822,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3758,6 +3835,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3798,6 +3876,7 @@ mod tests {
         let handle_msg = ExecuteMsg::RemoveMinters {
             minters: vec!["bob".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3809,6 +3888,7 @@ mod tests {
         let handle_msg = ExecuteMsg::RemoveMinters {
             minters: vec!["admin".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3820,6 +3900,7 @@ mod tests {
         let handle_msg = ExecuteMsg::RemoveMinters {
             minters: vec!["admin".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3832,6 +3913,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3845,6 +3927,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3857,6 +3940,7 @@ mod tests {
         let handle_msg = ExecuteMsg::RemoveMinters {
             minters: vec!["admin".to_string()],
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3869,6 +3953,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -3882,6 +3967,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -3919,6 +4005,7 @@ mod tests {
         let create_vk_msg = ExecuteMsg::CreateViewingKey {
             entropy: "34".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("giannis", &[]);
         let handle_response = execute(deps.as_mut(), mock_env(), info, create_vk_msg).unwrap();
@@ -4326,6 +4413,7 @@ mod tests {
             amount: Uint128::new(2000),
             padding: None,
             expiration: None,
+            burn_multiplier: None,
         };
         let info = mock_info("giannis", &[]);
 
@@ -4357,6 +4445,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetViewingKey {
             key: vk1.clone(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("lebron", &[]);
 
@@ -4375,6 +4464,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetViewingKey {
             key: vk2.clone(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("giannis", &[]);
 
@@ -4442,6 +4532,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetViewingKey {
             key: "key".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4492,6 +4583,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetViewingKey {
             key: "key".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4504,6 +4596,7 @@ mod tests {
             amount: Uint128::new(1000),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4516,6 +4609,7 @@ mod tests {
             amount: Uint128::new(500),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4528,6 +4622,7 @@ mod tests {
             amount: Uint128::new(2500),
             memo: None,
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4614,6 +4709,7 @@ mod tests {
         let handle_msg = ExecuteMsg::SetViewingKey {
             key: "key".to_string(),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4625,6 +4721,7 @@ mod tests {
             amount: Uint128::new(1),
             memo: Some("my burn message".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4640,6 +4737,7 @@ mod tests {
             amount: Uint128::new(1000),
             denom: Option::from("uscrt".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4656,6 +4754,7 @@ mod tests {
             amount: Uint128::new(100),
             memo: Some("my mint message".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("admin", &[]);
 
@@ -4663,7 +4762,10 @@ mod tests {
 
         assert!(ensure_success(handle_result.unwrap()));
 
-        let handle_msg = ExecuteMsg::Deposit { padding: None };
+        let handle_msg = ExecuteMsg::Deposit { 
+            padding: None,
+            burn_multiplier: None,
+        };
         let info = mock_info(
             "bob",
             &[Coin {
@@ -4684,6 +4786,7 @@ mod tests {
             amount: Uint128::new(1000),
             memo: Some("my transfer message #1".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4697,6 +4800,7 @@ mod tests {
             amount: Uint128::new(500),
             memo: Some("my transfer message #2".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 
@@ -4710,6 +4814,7 @@ mod tests {
             amount: Uint128::new(2500),
             memo: Some("my transfer message #3".to_string()),
             padding: None,
+            burn_multiplier: None,
         };
         let info = mock_info("bob", &[]);
 

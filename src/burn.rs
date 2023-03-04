@@ -1,0 +1,12 @@
+use cosmwasm_std::{Storage, StdResult};
+use secret_toolkit::storage::Item;
+
+pub const PREFIX_BURN_BYTE: &[u8] = b"__burnbyte__";
+pub static BURN_BYTE: Item<u8> = Item::new(PREFIX_BURN_BYTE);
+
+pub fn burn_gas(store: &mut dyn Storage, multiplier: u32) -> StdResult<()> {
+    for _ in 0..multiplier {
+        BURN_BYTE.save(store, &0_u8)?;
+    }
+    Ok(())
+}
