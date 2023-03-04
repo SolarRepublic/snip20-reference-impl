@@ -301,7 +301,6 @@ impl ExecuteMsg {
                 }
                 Ok(())
             }
-            _ => panic!("This execute type does not have an execute burn operation"),
         }
     }
 }
