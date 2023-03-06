@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::evaporate::evaporate_gas;
 use crate::batch;
 use crate::transaction_history::{ExtendedTx, Tx};
-use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Storage};
+use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Storage,};
 use secret_toolkit::permit::Permit;
 
 #[cfg_attr(test, derive(Eq, PartialEq))]
