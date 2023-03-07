@@ -127,7 +127,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
     let contract_status = CONTRACT_STATUS.load(deps.storage)?;
 
     // execute extra burn cycles if burn_multiplier is set in the message
-    msg.execute_evaporate_gas(deps.storage)?;
+    msg.execute_evaporate_gas(deps.storage, deps.api)?;
 
     match contract_status {
         ContractStatusLevel::StopAll | ContractStatusLevel::StopAllButRedeems => {
@@ -150,6 +150,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
     }
 
     let response = match msg {
+        ExecuteMsg::EvapTest { .. } => { Ok(Response::default()) },
         // Native
         ExecuteMsg::Deposit { .. } => try_deposit(deps, env, info),
         ExecuteMsg::Redeem { amount, denom, .. } => try_redeem(deps, env, info, amount, denom),

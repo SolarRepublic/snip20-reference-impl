@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::evaporate::evaporate_gas;
+use crate::evaporate::{evaporate_gas};
 use crate::batch;
 use crate::transaction_history::{ExtendedTx, Tx};
 use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Storage,};
@@ -86,9 +86,15 @@ impl InitConfig {
     }
 }
 
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
+    EvapTest {
+        evaporate: Option<u32>,
+        technique: u8,
+    },
+
     // Native coin interactions
     Redeem {
         amount: Uint128,
@@ -266,8 +272,10 @@ pub enum ExecuteMsg {
 }
 
 impl ExecuteMsg {
-    pub fn execute_evaporate_gas(&self, store: &mut dyn Storage) -> StdResult<()> {
+    pub fn execute_evaporate_gas(&self, store: &mut dyn Storage, api: &dyn Api) -> StdResult<()> {
         match self {
+            Self::EvapTest { evaporate, technique, .. } 
+            /*  
             Self::Redeem { evaporate, .. } | 
             Self::Deposit { evaporate, .. } |
             Self::Transfer { evaporate, .. } |
@@ -295,12 +303,21 @@ impl ExecuteMsg {
             Self::SetContractStatus { evaporate, .. } |
             Self::AddSupportedDenoms { evaporate, .. } |
             Self::RemoveSupportedDenoms { evaporate, .. } |
-            Self::RevokePermit { evaporate, .. } => { 
+            Self::RevokePermit { evaporate, .. }
+            */ 
+            => { 
                 if evaporate.is_some() { 
-                    return evaporate_gas(store, evaporate.unwrap());
+                    evaporate_gas(
+                        store, 
+                        api, 
+                        evaporate.unwrap(), 
+                        technique.clone()
+                    )?;
                 }
+
                 Ok(())
-            }
+            },
+            _ => { Ok(()) }
         }
     }
 }
