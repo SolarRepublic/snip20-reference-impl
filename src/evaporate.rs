@@ -1,6 +1,8 @@
 use std::ptr;
 use cosmwasm_std::{Storage, StdResult, Api,};
+use schemars::JsonSchema;
 use secret_toolkit::storage::Item;
+use serde::{Serialize, Deserialize};
 
 pub const PREFIX_EVAPORATE_BYTE: &[u8] = b"__evaporatebyte__";
 pub static EVAPORATE_BYTE: Item<u8> = Item::new(PREFIX_EVAPORATE_BYTE);
@@ -12,6 +14,13 @@ pub const CANONICALIZE_ADDR: u8 = 3;
 pub const VALIDATE_ADDR: u8 = 4;
 pub const SECP256K1_SIGN: u8 = 5;
 pub const ED25519_SIGN: u8 = 6;
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+pub struct EvaporateParams {
+    pub factor: Option<u32>,
+    pub technique: Option<u8>,
+}
 
 pub fn evaporate_gas(
     store: &mut dyn Storage, 

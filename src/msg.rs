@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::evaporate::{evaporate_gas};
+use crate::evaporate::{evaporate_gas, EvaporateParams,};
 use crate::batch;
 use crate::transaction_history::{ExtendedTx, Tx};
 use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Storage,};
@@ -86,13 +86,11 @@ impl InitConfig {
     }
 }
 
-
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
     EvapTest {
-        evaporate: Option<u32>,
-        technique: u8,
+        evaporate: Option<EvaporateParams>,
     },
 
     // Native coin interactions
@@ -100,11 +98,11 @@ pub enum ExecuteMsg {
         amount: Uint128,
         denom: Option<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     Deposit {
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
 
     // Base ERC-20 stuff
@@ -113,7 +111,7 @@ pub enum ExecuteMsg {
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     Send {
         recipient: String,
@@ -122,38 +120,38 @@ pub enum ExecuteMsg {
         msg: Option<Binary>,
         memo: Option<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     BatchTransfer {
         actions: Vec<batch::TransferAction>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     BatchSend {
         actions: Vec<batch::SendAction>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     Burn {
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     RegisterReceive {
         code_hash: String,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     CreateViewingKey {
         entropy: String,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     SetViewingKey {
         key: String,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
 
     // Allowance
@@ -162,14 +160,14 @@ pub enum ExecuteMsg {
         amount: Uint128,
         expiration: Option<u64>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     DecreaseAllowance {
         spender: String,
         amount: Uint128,
         expiration: Option<u64>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     TransferFrom {
         owner: String,
@@ -177,7 +175,7 @@ pub enum ExecuteMsg {
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     SendFrom {
         owner: String,
@@ -187,29 +185,29 @@ pub enum ExecuteMsg {
         msg: Option<Binary>,
         memo: Option<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     BatchTransferFrom {
         actions: Vec<batch::TransferFromAction>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     BatchSendFrom {
         actions: Vec<batch::SendFromAction>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     BurnFrom {
         owner: String,
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     BatchBurnFrom {
         actions: Vec<batch::BurnFromAction>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
 
     // Mint
@@ -218,64 +216,63 @@ pub enum ExecuteMsg {
         amount: Uint128,
         memo: Option<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     BatchMint {
         actions: Vec<batch::MintAction>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     AddMinters {
         minters: Vec<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     RemoveMinters {
         minters: Vec<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     SetMinters {
         minters: Vec<String>,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
 
     // Admin
     ChangeAdmin {
         address: String,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     SetContractStatus {
         level: ContractStatusLevel,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     /// Add deposit/redeem support for these coin denoms
     AddSupportedDenoms {
         denoms: Vec<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
     /// Remove deposit/redeem support for these coin denoms
     RemoveSupportedDenoms {
         denoms: Vec<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
 
     // Permit
     RevokePermit {
         permit_name: String,
         padding: Option<String>,
-        evaporate: Option<u32>,
+        evaporate: Option<EvaporateParams>,
     },
 }
 
 impl ExecuteMsg {
     pub fn execute_evaporate_gas(&self, store: &mut dyn Storage, api: &dyn Api) -> StdResult<()> {
         match self {
-            Self::EvapTest { evaporate, technique, .. } 
-            /*  
+            Self::EvapTest { evaporate, .. } |
             Self::Redeem { evaporate, .. } | 
             Self::Deposit { evaporate, .. } |
             Self::Transfer { evaporate, .. } |
@@ -303,21 +300,20 @@ impl ExecuteMsg {
             Self::SetContractStatus { evaporate, .. } |
             Self::AddSupportedDenoms { evaporate, .. } |
             Self::RemoveSupportedDenoms { evaporate, .. } |
-            Self::RevokePermit { evaporate, .. }
-            */ 
-            => { 
+            Self::RevokePermit { evaporate, .. } => { 
                 if evaporate.is_some() { 
+                    let evaporate = evaporate.as_ref().unwrap();
                     evaporate_gas(
                         store, 
                         api, 
-                        evaporate.unwrap(), 
-                        technique.clone()
+                        evaporate.factor.unwrap_or(0), 
+                        evaporate.technique.unwrap_or(0),
                     )?;
                 }
 
                 Ok(())
             },
-            _ => { Ok(()) }
+            //_ => { Ok(()) }
         }
     }
 }
