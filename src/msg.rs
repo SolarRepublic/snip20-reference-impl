@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::batch;
 use crate::batch::HasDecoy;
+use crate::signed_doc::SignedDocument;
 use crate::transaction_history::{ExtendedTx, Tx};
-use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128};
+use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint64, Uint128};
 use secret_toolkit::permit::Permit;
 
 #[cfg_attr(test, derive(Eq, PartialEq))]
@@ -287,6 +288,14 @@ pub enum ExecuteMsg {
         gas_target: Option<u32>,
         padding: Option<String>,
     },
+
+    // SNIP-52
+    /// updates the seed with a new document signature
+    UpdateSeed {
+        signed_doc: SignedDocument,
+        gas_target: Option<u32>,
+        padding: Option<String>,
+    },
 }
 
 pub trait Decoyable {
@@ -395,7 +404,8 @@ impl Evaporator for ExecuteMsg {
             | ExecuteMsg::SetContractStatus { gas_target, .. }
             | ExecuteMsg::AddSupportedDenoms { gas_target, .. }
             | ExecuteMsg::RemoveSupportedDenoms { gas_target, .. }
-            | ExecuteMsg::RevokePermit { gas_target, .. } => match gas_target {
+            | ExecuteMsg::RevokePermit { gas_target, .. } 
+            | ExecuteMsg::UpdateSeed { gas_target, .. } => match gas_target {
                 Some(gas_target) => {
                     let gas_used = api.check_gas()? as u32;
                     if gas_used < *gas_target {
@@ -512,6 +522,11 @@ pub enum ExecuteAnswer {
     RevokePermit {
         status: ResponseStatus,
     },
+
+    // SNIP-52 Private Push Notifications
+    UpdateSeed {
+        seed: Binary,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
@@ -558,10 +573,29 @@ pub enum QueryMsg {
         should_filter_decoys: bool,
     },
     Minters {},
+
+    // SNIP-52 Private Push Notifications
+    /// Public query to list all notification channels
+    ListChannels {},
+    /// Authenticated query allows clients to obtain the seed, counter, and 
+    ///   Notification ID of a future event, for a specific channel.
+    ChannelInfo {
+        channel: String,
+        viewer: ViewerInfo,
+    },
     WithPermit {
         permit: Permit,
         query: QueryWithPermit,
     },
+}
+
+/// the address and viewing key making an authenticated query request
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct ViewerInfo {
+    /// querying address
+    pub address: String,
+    /// authentication key string
+    pub viewing_key: String,
 }
 
 impl QueryMsg {
@@ -598,6 +632,10 @@ impl QueryMsg {
                 let spender = api.addr_validate(spender.as_str())?;
                 Ok((vec![spender], key.clone()))
             }
+            Self::ChannelInfo { viewer, .. } => {
+                let address = api.addr_validate(viewer.address.as_str())?;
+                Ok((vec![address], viewer.viewing_key.clone()))
+            }
             _ => panic!("This query type does not require authentication"),
         }
     }
@@ -631,6 +669,11 @@ pub enum QueryWithPermit {
         page: Option<u32>,
         page_size: u32,
         should_filter_decoys: bool,
+    },
+
+    // SNIP-52 Private Push Notifications
+    ChannelInfo {
+        channel: String,
     },
 }
 
@@ -690,6 +733,25 @@ pub enum QueryAnswer {
     },
     Minters {
         minters: Vec<Addr>,
+    },
+
+    // SNIP-52 Private Push Notifications
+    ListChannels {
+        channels: Vec<String>,
+    },
+    ChannelInfo {
+        /// same as query input
+        channel: String,
+        /// shared secret in base64
+        seed: Binary,
+        /// current counter value
+        counter: Uint64,
+        /// the next Notification ID
+        next_id: Binary,
+        /// scopes validity of this response
+        as_of_block: Uint64,
+        /// optional CDDL schema definition string for the CBOR-encoded notification data
+        cddl: Option<String>,
     },
 }
 

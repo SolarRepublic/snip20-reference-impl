@@ -1,9 +1,11 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
+use bech32::{ToBase32,Variant};
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env,
-    MessageInfo, Response, StdError, StdResult, Storage, Uint128,
+    entry_point, to_binary, Addr, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128, Uint64
 };
+use minicbor_ser as cbor;
+use hkdf::hmac::Mac;
 use rand::RngCore;
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
 use secret_toolkit::utils::{pad_handle_result, pad_query_result};
@@ -11,15 +13,17 @@ use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{sha_256, ContractPrng, SHA256_HASH_SIZE};
 
 use crate::batch;
+use crate::channel::{Channel, CHANNELS, CHANNEL_SCHEMATA};
+use crate::crypto::{HmacSha256, cipher_data, hkdf_sha_256};
 use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, Decoyable, Evaporator,
     ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit,
     ResponseStatus::Success,
 };
 use crate::receiver::Snip20ReceiveMsg;
+use crate::signed_doc::{pubkey_to_account, Document, SignedDocument};
 use crate::state::{
-    safe_add, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore,
-    CONFIG, CONTRACT_STATUS, TOTAL_SUPPLY,
+    get_count, get_seed, safe_add, store_seed, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, CONTRACT_STATUS, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY
 };
 use crate::transaction_history::{
     store_burn, store_deposit, store_mint, store_redeem, store_transfer, StoredExtendedTx,
@@ -56,7 +60,7 @@ pub fn instantiate(
 
     let admin = match msg.admin {
         Some(admin_addr) => deps.api.addr_validate(admin_addr.as_str())?,
-        None => info.sender,
+        None => info.sender.clone(),
     };
 
     let mut total_supply: u128 = 0;
@@ -134,6 +138,54 @@ pub fn instantiate(
     MintersStore::save(deps.storage, minters)?;
 
     ViewingKey::set_seed(deps.storage, &prng_seed_hashed);
+
+    // SNIP-52
+    // use entropy and env.random to create an internal secret for the contract
+    let entropy = msg.prng_seed.0.as_slice();
+    let entropy_len = 16 + info.sender.to_string().len() + entropy.len();
+    let mut rng_entropy = Vec::with_capacity(entropy_len);
+    rng_entropy.extend_from_slice(&env.block.height.to_be_bytes());
+    rng_entropy.extend_from_slice(&env.block.time.seconds().to_be_bytes());
+    rng_entropy.extend_from_slice(info.sender.as_bytes());
+    rng_entropy.extend_from_slice(entropy);
+    let rng_seed = env.block.random.as_ref().unwrap();
+
+    // Create SNIP52_INTERNAL_SECRET
+    let salt = Some(sha_256(&rng_entropy).to_vec());
+    let internal_secret = hkdf_sha_256(
+        &salt, 
+        rng_seed.0.as_slice(), 
+        "contract_internal_secret".as_bytes()
+    )?;
+    SNIP52_INTERNAL_SECRET.save(
+        deps.storage, 
+        &internal_secret.to_vec()
+    )?;
+
+    // Hard-coded channels
+    let channels: Vec<Channel> = vec![
+        //TODO
+        //Channel {
+        //    id: MESSAGE_CHANNEL_ID.to_string(),
+        //    schema: Some(MESSAGE_CHANNEL_SCHEMA.to_string()),
+        //},
+        //Channel {
+        //    id: REACTION_CHANNEL_ID.to_string(),
+        //    schema: Some(REACTION_CHANNEL_SCHEMA.to_string()),
+        //}
+    ];
+
+    channels.into_iter().for_each(|channel| {
+        channel.store(deps.storage).unwrap()
+    });
+
+    // TODO: Do we want to update viewing key derivation?
+    //let vk_seed = hkdf_sha_256(
+    //    &salt, 
+    //    rng_seed.0.as_slice(), 
+    //    "contract_viewing_key".as_bytes()
+    //)?;
+    //ViewingKey::set_seed(deps.storage, &vk_seed);
 
     Ok(Response::default())
 }
@@ -372,7 +424,15 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         ExecuteMsg::AddSupportedDenoms { denoms, .. } => add_supported_denoms(deps, info, denoms),
         ExecuteMsg::RemoveSupportedDenoms { denoms, .. } => {
             remove_supported_denoms(deps, info, denoms)
-        }
+        },
+
+        // SNIP-52
+        ExecuteMsg::UpdateSeed { signed_doc, .. } => try_update_seed(
+            deps,
+            env,
+            &info.sender, 
+            signed_doc
+        ),
     };
 
     let padded_result = pad_handle_result(response, RESPONSE_BLOCK_SIZE);
@@ -381,7 +441,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
 }
 
 #[entry_point]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     pad_query_result(
         match msg {
             QueryMsg::TokenInfo {} => query_token_info(deps.storage),
@@ -389,14 +449,15 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             QueryMsg::ContractStatus {} => query_contract_status(deps.storage),
             QueryMsg::ExchangeRate {} => query_exchange_rate(deps.storage),
             QueryMsg::Minters { .. } => query_minters(deps),
-            QueryMsg::WithPermit { permit, query } => permit_queries(deps, permit, query),
-            _ => viewing_keys_queries(deps, msg),
+            QueryMsg::WithPermit { permit, query } => permit_queries(deps, env, permit, query),
+            QueryMsg::ListChannels{} => query_list_channels(deps),
+            _ => viewing_keys_queries(deps, env, msg),
         },
         RESPONSE_BLOCK_SIZE,
     )
 }
 
-fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<Binary, StdError> {
+fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) -> Result<Binary, StdError> {
     // Validate permit content
     let token_address = CONFIG.load(deps.storage)?.contract_address;
 
@@ -521,10 +582,11 @@ fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<
             }
             query_allowances_received(deps, account, page.unwrap_or(0), page_size)
         }
+        QueryWithPermit::ChannelInfo { channel } => query_channel_info(deps, &env, channel, deps.api.addr_canonicalize(account.as_str())?)
     }
 }
 
-pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
+pub fn viewing_keys_queries(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     let (addresses, key) = msg.get_validation_params(deps.api)?;
 
     for address in addresses {
@@ -572,6 +634,10 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
                     page_size,
                     ..
                 } => query_allowances_received(deps, spender, page.unwrap_or(0), page_size),
+                QueryMsg::ChannelInfo { channel, viewer } => {
+                    let sender_raw = deps.api.addr_canonicalize(viewer.address.as_str())?;
+                    query_channel_info(deps, &env, channel, sender_raw)
+                },
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -2057,6 +2123,264 @@ fn is_valid_symbol(symbol: &str) -> bool {
 
     len_is_valid && symbol.bytes().all(|byte| byte.is_ascii_alphabetic())
 }
+
+// *****************
+// SNIP-52 functions
+// *****************
+
+/// 
+/// Execute UpdateSeed message
+/// 
+///   Allows clients to set a new shared secret. In order to guarantee the provided 
+///   secret has high entropy, clients must submit a signed document params and signature 
+///   to be verified before the new shared secret (i.e., the signature) is accepted.
+/// 
+///   Updates the sender's seed with the signature of the `signed_doc`. The signed doc
+///   is validated to make sure:
+///   - the signature is verified, 
+///   - that the sender was the signer of the doc, 
+///   - the `contract` field matches the address of this contract
+///   - the `previous_seed` field matches the previous seed stored in the contract
+/// 
+pub fn try_update_seed(
+    deps: DepsMut,
+    env: Env,
+    sender: &Addr,
+    signed_doc: SignedDocument,
+) -> StdResult<Response> {
+    let account = validate_signed_doc(deps.api, &signed_doc, None)?;
+
+    if sender.as_str() != account {
+        return Err(StdError::generic_err("Signed doc is not signed by sender"));
+    }
+
+    if signed_doc.params.contract != env.contract.address.as_str() {
+        return Err(StdError::generic_err(
+            "Signed doc is not for this contract",
+        ));
+    }
+
+    let sender_raw = deps.api.addr_canonicalize(sender.as_str())?;
+
+    let previous_seed = get_seed(deps.storage, &sender_raw)?;
+    if previous_seed != signed_doc.params.previous_seed {
+        return Err(StdError::generic_err("Previous seed does not match previous seed in signed doc"));
+    }
+
+    let new_seed = sha_256(&signed_doc.signature.signature.0).to_vec();
+
+    store_seed(deps.storage, &sender_raw, new_seed)?;
+
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::UpdateSeed {
+        seed: signed_doc.signature.signature,
+    })?))
+}
+
+///
+/// fn validate_signed_doc
+/// 
+///   Validates a signed doc to verify the signature is correct. Returns the account
+///   derived from the public key.
+/// 
+fn validate_signed_doc(
+    api: &dyn Api,
+    signed_doc: &SignedDocument,
+    hrp: Option<&str>,
+) -> StdResult<String> {
+    let account_hrp = hrp.unwrap_or("secret");
+
+    // Derive account from pubkey
+    let pubkey = &signed_doc.signature.pub_key.value;
+
+    let base32_addr = pubkey_to_account(pubkey).0.as_slice().to_base32();
+    let account: String = bech32::encode(account_hrp, base32_addr, Variant::Bech32).unwrap();
+
+    let signed_bytes = to_binary(&Document::from_params(&signed_doc.params))?;
+    let signed_bytes_hash = sha_256(signed_bytes.as_slice());
+
+    let verified = api
+        .secp256k1_verify(
+            &signed_bytes_hash, 
+            &signed_doc.signature.signature.0, 
+            &pubkey.0
+        ).map_err(|err| StdError::generic_err(err.to_string()))?;
+    
+    if !verified {
+        return Err(StdError::generic_err(
+            "Failed to verify signatures for the given signed doc",
+        ));
+    }
+
+    Ok(account)
+}
+
+/// 
+/// fn notification_id
+/// 
+///   Returns a notification id for the given address and channel id.
+/// 
+/// pseudocode:
+/// 
+/// fun notificationIDFor(contractOrRecipientAddr, channelId) {
+///   // counter reflects the nth notification for the given contract/recipient in the given channel
+///   let counter := getCounterFor(contractOrRecipientAddr, channelId)
+///
+///   // compute notification ID for this event
+///   let seed := getSeedFor(contractOrRecipientAddr)
+///   let material := concatStrings(channelId, ":", uintToDecimalString(counter))
+///   let notificationID := hmac_sha256(key=seed, message=utf8ToBytes(material))
+///
+///   return notificationID
+/// }
+/// 
+fn notification_id(
+    storage: &dyn Storage,
+    addr: &CanonicalAddr,
+    channel: &String,
+) -> StdResult<Binary> {
+    let counter = get_count(storage, channel, addr);
+
+    // compute notification ID for this event
+    let seed = get_seed(storage, addr)?;
+    let material = [
+        channel.as_bytes(),
+        ":".as_bytes(),
+        counter.to_string().as_bytes()
+    ].concat();
+
+    let mut mac: HmacSha256 = HmacSha256::new_from_slice(seed.0.as_slice()).unwrap();
+    mac.update(material.as_slice());
+    let result = mac.finalize();
+    let code_bytes = result.into_bytes();
+    Ok(Binary::from(code_bytes.as_slice()))
+}
+
+/// 
+/// fn encrypt_notification_data
+/// 
+///   Returns encrypted bytes given plaintext bytes, address, and channel id.
+/// 
+/// pseudocode:
+/// 
+/// fun encryptNotificationData(recipientAddr, channelId, plaintext, env) {
+///   // counter reflects the nth notification for the given recipient in the given channel
+///   let counter := getCounterFor(recipientAddr, channelId)
+///
+///   let seed := getSeedFor(recipientAddr)
+///
+///   // ChaCha20 expects a 96-bit (12 bytes) nonce
+///   // take the first 12 bytes of the channel id's sha256 hash
+///   let channelIdBytes := slice(sha256(utf8ToBytes(channelId)), 0, 12)
+///
+///   // encode uint64 counter in BE and left-pad with 4 bytes of 0x00
+///   let counterBytes := concat(zeros(4), uint64BigEndian(counter))
+///
+///   // produce the nonce by XOR'ing the two previous 12-byte results
+///   let nonce := xorBytes(channelIdBytes, counterBytes)
+///
+///   // right-pad the plaintext with 0x00 bytes until it is of the desired length (keep in mind, payload adds 16 bytes for tag)
+///   let message := concat(plaintext, zeros(DATA_LEN - len(plaintext)))
+///
+///   // construct the additional authenticated data
+///   let aad := concatStrings(env.blockHeight, ":", env.senderAddress)
+///
+///   // encrypt notification data for this event
+///   let [ciphertext, tag] := chacha20poly1305_encrypt(key=seed, nonce=nonce, message=message, aad=aad)
+///
+///   // concatenate ciphertext and 16 bytes of tag (note: crypto libs typically default to doing it this way in `seal`)
+///   let payload := concat(ciphertext, tag)
+///
+///   return payload
+/// }
+/// 
+
+fn encrypt_notification_data(
+    storage: &dyn Storage,
+    env: &Env,
+    sender: &Addr,
+    recipient: &CanonicalAddr,
+    channel: &String,
+    plaintext: Vec<u8>,
+) -> StdResult<Binary> {
+    let counter = get_count(storage, channel, recipient);
+    let mut padded_plaintext = plaintext.clone();
+    zero_pad(&mut padded_plaintext, RESPONSE_BLOCK_SIZE);
+
+    let seed = get_seed(storage, recipient)?;
+    let channel_id_bytes = sha_256(channel.as_bytes())[..12].to_vec();
+    let counter_bytes = [&[0_u8, 0_u8, 0_u8, 0_u8], counter.to_be_bytes().as_slice()].concat();
+    let nonce: Vec<u8> = channel_id_bytes.iter().zip(counter_bytes.iter()).map(|(&b1, &b2)| b1 ^ b2 ).collect();
+    // TODO: add option to use tx hash instead of sender in aad
+    //       requires tx hash to be added to `env`
+    let aad = format!("{}:{}", env.block.height, sender.to_string());
+
+    // encrypt notification data for this event
+    let tag_ciphertext = cipher_data(
+        seed.0.as_slice(),
+        nonce.as_slice(),
+        padded_plaintext.as_slice(),
+        aad.as_bytes()
+    )?;
+
+    Ok(Binary::from(tag_ciphertext.clone()))
+}
+
+/// Take a Vec<u8> and pad it up to a multiple of `block_size`, using 0x00 at the end.
+fn zero_pad(message: &mut Vec<u8>, block_size: usize) -> &mut Vec<u8> {
+    let len = message.len();
+    let surplus = len % block_size;
+    if surplus == 0 {
+        return message;
+    }
+
+    let missing = block_size - surplus;
+    message.reserve(missing);
+    message.extend(std::iter::repeat(0x00).take(missing));
+    message
+}
+
+///
+/// ListChannels query
+/// 
+///   Public query to list all notification channels.
+/// 
+fn query_list_channels(deps: Deps) -> StdResult<Binary> {
+    let channels: Vec<String> = CHANNELS
+        .iter(deps.storage)?
+        .map(|channel| channel.unwrap())
+        .collect();
+    to_binary(&QueryAnswer::ListChannels { channels })
+}
+
+///
+/// ChannelInfo query
+/// 
+///   Authenticated query allows clients to obtain the seed, counter, 
+///   and Notification ID of a future event, for a specific channel.
+/// 
+fn query_channel_info(
+    deps: Deps,
+    env: &Env,
+    channel: String,
+    sender_raw: CanonicalAddr,
+) -> StdResult<Binary> {
+    let next_id = notification_id(deps.storage, &sender_raw, &channel)?;
+    let counter = Uint64::from(get_count(deps.storage, &channel, &sender_raw));
+    let schema = CHANNEL_SCHEMATA.get(deps.storage, &channel);
+
+    to_binary(&QueryAnswer::ChannelInfo { 
+        channel,
+        seed: get_seed(deps.storage, &sender_raw)?, 
+        counter, 
+        next_id, 
+        as_of_block: Uint64::from(env.block.height),
+        cddl: schema,
+    })
+}
+
+// *****************
+// End SNIP-52 functions
+// *****************
 
 // pub fn migrate(
 //     _deps: DepsMut,

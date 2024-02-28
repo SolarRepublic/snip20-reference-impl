@@ -1,11 +1,13 @@
+use base64::{engine::general_purpose, Engine};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{Addr, StdError, StdResult, Storage};
+use cosmwasm_std::{Addr, Binary, CanonicalAddr, StdError, StdResult, Storage};
 use secret_toolkit::serialization::Json;
 use secret_toolkit::storage::{Item, Keymap, Keyset};
 use secret_toolkit_crypto::SHA256_HASH_SIZE;
 
+use crate::crypto::hkdf_sha_256;
 use crate::msg::ContractStatusLevel;
 
 pub const KEY_CONFIG: &[u8] = b"config";
@@ -313,5 +315,72 @@ impl ReceiverHashStore {
     pub fn save(store: &mut dyn Storage, account: &Addr, code_hash: String) -> StdResult<()> {
         let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
         receiver_hash.save(store, &code_hash)
+    }
+}
+
+// SNIP-52 Private Push Notifications
+
+pub static SNIP52_INTERNAL_SECRET: Item<Vec<u8>> = Item::new(b"snip52-secret");
+pub static SNIP52_COUNTERS: Keymap<CanonicalAddr,u64> = Keymap::new(b"snip52-counters");
+pub static SNIP52_SEEDS: Keymap<CanonicalAddr,Vec<u8>> = Keymap::new(b"snip52-seeds");
+
+/// increment counter for a given address
+pub fn increment_count(
+    storage: &mut dyn Storage,
+    channel: &String,
+    addr: &CanonicalAddr,
+) -> StdResult<u64> {
+    let count = SNIP52_COUNTERS.add_suffix(channel.as_bytes()).get(storage, addr).unwrap_or(0_u64);
+    let new_count = count.wrapping_add(1_u64);
+    SNIP52_COUNTERS.add_suffix(channel.as_bytes()).insert(storage, addr, &new_count)?;
+    Ok(new_count)
+}
+
+/// get counter for a given address
+#[inline]
+pub fn get_count(
+    storage: &dyn Storage,
+    channel: &String,
+    addr: &CanonicalAddr,
+) -> u64 {
+    SNIP52_COUNTERS.add_suffix(channel.as_bytes()).get(storage, addr).unwrap_or(0_u64)
+}
+
+/// store the seed for a given address
+#[inline]
+pub fn store_seed(
+    storage: &mut dyn Storage,
+    addr: &CanonicalAddr,
+    seed: Vec<u8>,
+) -> StdResult<()> {
+    SNIP52_SEEDS.insert(storage, addr, &seed)
+}
+
+/// get the seed for a given address
+/// fun getSeedFor(recipientAddr) {
+///   // recipient has a shared secret with contract
+///   let seed := sharedSecretsTable[recipientAddr]
+/// 
+///   // no explicit shared secret; derive seed using contract's internal secret
+///   if NOT exists(seed):
+///     seed := hkdf(ikm=contractInternalSecret, info=canonical(recipientAddr))
+///
+///   return seed
+/// }
+
+pub fn get_seed(
+    storage: &dyn Storage,
+    addr: &CanonicalAddr,
+) -> StdResult<Binary> {
+    let may_seed = SNIP52_SEEDS.get(storage, addr);
+    if let Some(seed) = may_seed {
+        Ok(Binary::from(seed))
+    } else {
+        let new_seed = hkdf_sha_256(
+            &None, 
+            SNIP52_INTERNAL_SECRET.load(storage)?.as_slice(), 
+            addr.as_slice()
+        )?;
+        Binary::from_base64(&general_purpose::STANDARD.encode(new_seed))
     }
 }
