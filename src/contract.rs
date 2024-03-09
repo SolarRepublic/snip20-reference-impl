@@ -1945,12 +1945,46 @@ fn try_increase_allowance(
     let new_amount = allowance.amount;
     AllowancesStore::save(deps.storage, &info.sender, &spender, &allowance)?;
 
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let allower_raw = deps.api.addr_canonicalize(info.sender.as_str())?;
+    let recipient_raw = deps.api.addr_canonicalize(spender.as_str())?;
+    let channel = UPDATED_ALLOWANCE_CHANNEL_ID.to_string();
+
+    // get notification id for receiver of allowance
+    let updated_allowance_id = notification_id(deps.storage, &recipient_raw, &channel, &tx_hash)?;
+
+    // use CBOR to encode data
+    let updated_allowance_data = cbor::to_vec(&(
+        new_amount.to_be_bytes(),
+        allower_raw.as_slice(),
+        expiration.unwrap_or_default(),
+    )).map_err(|e| 
+        StdError::generic_err(format!("{:?}", e))
+    )?;
+
+    // encrypt the updated allowance message
+    let updated_allowance_encrypted_data = encrypt_notification_data(
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+        &recipient_raw,
+        &channel,
+        updated_allowance_data
+    )?;
+
+    let notification = Notification {
+        id: updated_allowance_id,
+        encrypted_data: updated_allowance_encrypted_data,
+    };
+
     Ok(
-        Response::new().set_data(to_binary(&ExecuteAnswer::IncreaseAllowance {
+        Response::new()
+        .set_data(to_binary(&ExecuteAnswer::IncreaseAllowance {
             owner: info.sender,
             spender,
             allowance: Uint128::from(new_amount),
-        })?),
+        })?)
+        .add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext())
     )
 }
 
@@ -1981,12 +2015,46 @@ fn try_decrease_allowance(
     let new_amount = allowance.amount;
     AllowancesStore::save(deps.storage, &info.sender, &spender, &allowance)?;
 
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let allower_raw = deps.api.addr_canonicalize(info.sender.as_str())?;
+    let recipient_raw = deps.api.addr_canonicalize(spender.as_str())?;
+    let channel = UPDATED_ALLOWANCE_CHANNEL_ID.to_string();
+
+    // get notification id for receiver of allowance
+    let updated_allowance_id = notification_id(deps.storage, &recipient_raw, &channel, &tx_hash)?;
+
+    // use CBOR to encode data
+    let updated_allowance_data = cbor::to_vec(&(
+        new_amount.to_be_bytes(),
+        allower_raw.as_slice(),
+        expiration.unwrap_or_default(),
+    )).map_err(|e| 
+        StdError::generic_err(format!("{:?}", e))
+    )?;
+
+    // encrypt the updated allowance message
+    let updated_allowance_encrypted_data = encrypt_notification_data(
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+        &recipient_raw,
+        &channel,
+        updated_allowance_data
+    )?;
+
+    let notification = Notification {
+        id: updated_allowance_id,
+        encrypted_data: updated_allowance_encrypted_data,
+    };
+
     Ok(
-        Response::new().set_data(to_binary(&ExecuteAnswer::DecreaseAllowance {
+        Response::new()
+        .set_data(to_binary(&ExecuteAnswer::DecreaseAllowance {
             owner: info.sender,
             spender,
             allowance: Uint128::from(new_amount),
-        })?),
+        })?)
+        .add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext())
     )
 }
 
