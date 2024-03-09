@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::batch;
 use crate::batch::HasDecoy;
-use crate::signed_doc::SignedDocument;
 use crate::transaction_history::{ExtendedTx, Tx};
 use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint64, Uint128};
 use secret_toolkit::permit::Permit;
@@ -288,14 +287,6 @@ pub enum ExecuteMsg {
         gas_target: Option<u32>,
         padding: Option<String>,
     },
-
-    // SNIP-52
-    /// updates the seed with a new document signature
-    UpdateSeed {
-        signed_doc: SignedDocument,
-        gas_target: Option<u32>,
-        padding: Option<String>,
-    },
 }
 
 pub trait Decoyable {
@@ -404,8 +395,7 @@ impl Evaporator for ExecuteMsg {
             | ExecuteMsg::SetContractStatus { gas_target, .. }
             | ExecuteMsg::AddSupportedDenoms { gas_target, .. }
             | ExecuteMsg::RemoveSupportedDenoms { gas_target, .. }
-            | ExecuteMsg::RevokePermit { gas_target, .. } 
-            | ExecuteMsg::UpdateSeed { gas_target, .. } => match gas_target {
+            | ExecuteMsg::RevokePermit { gas_target, .. } => match gas_target {
                 Some(gas_target) => {
                     let gas_used = api.check_gas()? as u32;
                     if gas_used < *gas_target {
@@ -522,11 +512,6 @@ pub enum ExecuteAnswer {
     RevokePermit {
         status: ResponseStatus,
     },
-
-    // SNIP-52 Private Push Notifications
-    UpdateSeed {
-        seed: Binary,
-    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
@@ -577,8 +562,8 @@ pub enum QueryMsg {
     // SNIP-52 Private Push Notifications
     /// Public query to list all notification channels
     ListChannels {},
-    /// Authenticated query allows clients to obtain the seed, counter, and 
-    ///   Notification ID of a future event, for a specific channel.
+    /// Authenticated query allows clients to obtain the seed 
+    /// and schema for a specific channel.
     ChannelInfo {
         channel: String,
         viewer: ViewerInfo,
@@ -744,12 +729,12 @@ pub enum QueryAnswer {
         channel: String,
         /// shared secret in base64
         seed: Binary,
-        /// current counter value
-        counter: Uint64,
-        /// the next Notification ID
-        next_id: Binary,
-        /// scopes validity of this response
-        as_of_block: Uint64,
+        /// "counter" or "txhash"
+        mode: String,
+        /// current counter value (not used)
+        counter: Option<Uint64>,
+        /// the next Notification ID (not used)
+        next_id: Option<Binary>,
         /// optional CDDL schema definition string for the CBOR-encoded notification data
         cddl: Option<String>,
     },

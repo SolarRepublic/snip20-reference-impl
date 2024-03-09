@@ -143,7 +143,7 @@ impl BalancesStore {
         operation_name: &str,
         decoys: &Option<Vec<Addr>>,
         account_random_pos: &Option<usize>,
-    ) -> StdResult<()> {
+    ) -> StdResult<u128> {
         match decoys {
             None => {
                 let mut balance = Self::load(store, account);
@@ -163,7 +163,8 @@ impl BalancesStore {
                     }
                 };
 
-                Self::save(store, account, balance)
+                Self::save(store, account, balance)?;
+                Ok(balance)
             }
             Some(decoys_vec) => {
                 // It should always be set when decoys_vec is set
@@ -179,6 +180,8 @@ impl BalancesStore {
                 // In a case where the account is also a decoy somehow
                 let mut was_account_updated = false;
 
+                let mut return_balance: u128 = 0;
+
                 for acc in accounts_to_be_written.iter() {
                     // Always load account balance to obfuscate the real account
                     // Please note that decoys are not always present in the DB. In this case it is ok beacuse load will return 0.
@@ -190,11 +193,13 @@ impl BalancesStore {
                         new_balance = match should_add {
                             true => {
                                 safe_add(&mut acc_balance, amount_to_be_updated);
+                                return_balance = acc_balance;
                                 acc_balance
                             }
                             false => {
                                 if let Some(balance) = acc_balance.checked_sub(amount_to_be_updated)
                                 {
+                                    return_balance = balance;
                                     balance
                                 } else {
                                     return Err(StdError::generic_err(format!(
@@ -207,7 +212,7 @@ impl BalancesStore {
                     Self::save(store, acc, new_balance)?;
                 }
 
-                Ok(())
+                Ok(return_balance)
             }
         }
     }
@@ -321,66 +326,16 @@ impl ReceiverHashStore {
 // SNIP-52 Private Push Notifications
 
 pub static SNIP52_INTERNAL_SECRET: Item<Vec<u8>> = Item::new(b"snip52-secret");
-pub static SNIP52_COUNTERS: Keymap<CanonicalAddr,u64> = Keymap::new(b"snip52-counters");
-pub static SNIP52_SEEDS: Keymap<CanonicalAddr,Vec<u8>> = Keymap::new(b"snip52-seeds");
-
-/// increment counter for a given address
-pub fn increment_count(
-    storage: &mut dyn Storage,
-    channel: &String,
-    addr: &CanonicalAddr,
-) -> StdResult<u64> {
-    let count = SNIP52_COUNTERS.add_suffix(channel.as_bytes()).get(storage, addr).unwrap_or(0_u64);
-    let new_count = count.wrapping_add(1_u64);
-    SNIP52_COUNTERS.add_suffix(channel.as_bytes()).insert(storage, addr, &new_count)?;
-    Ok(new_count)
-}
-
-/// get counter for a given address
-#[inline]
-pub fn get_count(
-    storage: &dyn Storage,
-    channel: &String,
-    addr: &CanonicalAddr,
-) -> u64 {
-    SNIP52_COUNTERS.add_suffix(channel.as_bytes()).get(storage, addr).unwrap_or(0_u64)
-}
-
-/// store the seed for a given address
-#[inline]
-pub fn store_seed(
-    storage: &mut dyn Storage,
-    addr: &CanonicalAddr,
-    seed: Vec<u8>,
-) -> StdResult<()> {
-    SNIP52_SEEDS.insert(storage, addr, &seed)
-}
 
 /// get the seed for a given address
-/// fun getSeedFor(recipientAddr) {
-///   // recipient has a shared secret with contract
-///   let seed := sharedSecretsTable[recipientAddr]
-/// 
-///   // no explicit shared secret; derive seed using contract's internal secret
-///   if NOT exists(seed):
-///     seed := hkdf(ikm=contractInternalSecret, info=canonical(recipientAddr))
-///
-///   return seed
-/// }
-
 pub fn get_seed(
     storage: &dyn Storage,
     addr: &CanonicalAddr,
 ) -> StdResult<Binary> {
-    let may_seed = SNIP52_SEEDS.get(storage, addr);
-    if let Some(seed) = may_seed {
-        Ok(Binary::from(seed))
-    } else {
-        let new_seed = hkdf_sha_256(
-            &None, 
-            SNIP52_INTERNAL_SECRET.load(storage)?.as_slice(), 
-            addr.as_slice()
-        )?;
-        Binary::from_base64(&general_purpose::STANDARD.encode(new_seed))
-    }
+    let seed = hkdf_sha_256(
+        &None, 
+        SNIP52_INTERNAL_SECRET.load(storage)?.as_slice(), 
+        addr.as_slice()
+    )?;
+    Binary::from_base64(&general_purpose::STANDARD.encode(seed))
 }

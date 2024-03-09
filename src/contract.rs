@@ -1,8 +1,7 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
-use bech32::{ToBase32,Variant};
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128, Uint64
+    entry_point, to_binary, Addr, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128,
 };
 use minicbor_ser as cbor;
 use hkdf::hmac::Mac;
@@ -13,7 +12,7 @@ use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{sha_256, ContractPrng, SHA256_HASH_SIZE};
 
 use crate::batch;
-use crate::channel::{Channel, CHANNELS, CHANNEL_SCHEMATA};
+use crate::channel::{Channel, Notification, CHANNELS, CHANNEL_SCHEMATA, RECEIVED_TOKENS_CHANNEL_ID, RECEIVED_TOKENS_CHANNEL_SCHEMA, SPENT_TOKENS_CHANNEL_ID, SPENT_TOKENS_CHANNEL_SCHEMA, UPDATED_ALLOWANCE_CHANNEL_ID, UPDATED_ALLOWANCE_CHANNEL_SCHEMA};
 use crate::crypto::{HmacSha256, cipher_data, hkdf_sha_256};
 use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, Decoyable, Evaporator,
@@ -21,9 +20,8 @@ use crate::msg::{
     ResponseStatus::Success,
 };
 use crate::receiver::Snip20ReceiveMsg;
-use crate::signed_doc::{pubkey_to_account, Document, SignedDocument};
 use crate::state::{
-    get_count, get_seed, safe_add, store_seed, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, CONTRACT_STATUS, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY
+    get_seed, safe_add, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, CONTRACT_STATUS, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY
 };
 use crate::transaction_history::{
     store_burn, store_deposit, store_mint, store_redeem, store_transfer, StoredExtendedTx,
@@ -33,6 +31,7 @@ use crate::transaction_history::{
 /// We make sure that responses from `handle` are padded to a multiple of this size.
 pub const RESPONSE_BLOCK_SIZE: usize = 256;
 pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
+pub const NOTIFICATION_BLOCK_SIZE: usize = 32;
 
 #[entry_point]
 pub fn instantiate(
@@ -164,15 +163,18 @@ pub fn instantiate(
 
     // Hard-coded channels
     let channels: Vec<Channel> = vec![
-        //TODO
-        //Channel {
-        //    id: MESSAGE_CHANNEL_ID.to_string(),
-        //    schema: Some(MESSAGE_CHANNEL_SCHEMA.to_string()),
-        //},
-        //Channel {
-        //    id: REACTION_CHANNEL_ID.to_string(),
-        //    schema: Some(REACTION_CHANNEL_SCHEMA.to_string()),
-        //}
+        Channel {
+            id: RECEIVED_TOKENS_CHANNEL_ID.to_string(),
+            schema: Some(RECEIVED_TOKENS_CHANNEL_SCHEMA.to_string()),
+        },
+        Channel {
+            id: SPENT_TOKENS_CHANNEL_ID.to_string(),
+            schema: Some(SPENT_TOKENS_CHANNEL_SCHEMA.to_string()),
+        },
+        Channel {
+            id: UPDATED_ALLOWANCE_CHANNEL_ID.to_string(),
+            schema: Some(UPDATED_ALLOWANCE_CHANNEL_SCHEMA.to_string()),
+        },
     ];
 
     channels.into_iter().for_each(|channel| {
@@ -425,14 +427,6 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         ExecuteMsg::RemoveSupportedDenoms { denoms, .. } => {
             remove_supported_denoms(deps, info, denoms)
         },
-
-        // SNIP-52
-        ExecuteMsg::UpdateSeed { signed_doc, .. } => try_update_seed(
-            deps,
-            env,
-            &info.sender, 
-            signed_doc
-        ),
     };
 
     let padded_result = pad_handle_result(response, RESPONSE_BLOCK_SIZE);
@@ -441,7 +435,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
 }
 
 #[entry_point]
-pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     pad_query_result(
         match msg {
             QueryMsg::TokenInfo {} => query_token_info(deps.storage),
@@ -449,15 +443,15 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             QueryMsg::ContractStatus {} => query_contract_status(deps.storage),
             QueryMsg::ExchangeRate {} => query_exchange_rate(deps.storage),
             QueryMsg::Minters { .. } => query_minters(deps),
-            QueryMsg::WithPermit { permit, query } => permit_queries(deps, env, permit, query),
+            QueryMsg::WithPermit { permit, query } => permit_queries(deps, permit, query),
             QueryMsg::ListChannels{} => query_list_channels(deps),
-            _ => viewing_keys_queries(deps, env, msg),
+            _ => viewing_keys_queries(deps, msg),
         },
         RESPONSE_BLOCK_SIZE,
     )
 }
 
-fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) -> Result<Binary, StdError> {
+fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<Binary, StdError> {
     // Validate permit content
     let token_address = CONFIG.load(deps.storage)?.contract_address;
 
@@ -582,11 +576,14 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             }
             query_allowances_received(deps, account, page.unwrap_or(0), page_size)
         }
-        QueryWithPermit::ChannelInfo { channel } => query_channel_info(deps, &env, channel, deps.api.addr_canonicalize(account.as_str())?)
+        QueryWithPermit::ChannelInfo { channel } => {
+            query_channel_info(deps, channel, deps.api.addr_canonicalize(account.as_str())?
+            )
+        }
     }
 }
 
-pub fn viewing_keys_queries(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
     let (addresses, key) = msg.get_validation_params(deps.api)?;
 
     for address in addresses {
@@ -635,8 +632,7 @@ pub fn viewing_keys_queries(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Bi
                     ..
                 } => query_allowances_received(deps, spender, page.unwrap_or(0), page_size),
                 QueryMsg::ChannelInfo { channel, viewer } => {
-                    let sender_raw = deps.api.addr_canonicalize(viewer.address.as_str())?;
-                    query_channel_info(deps, &env, channel, sender_raw)
+                    query_channel_info(deps, channel, deps.api.addr_canonicalize(viewer.address.as_str())?)
                 },
                 _ => panic!("This query type does not require authentication"),
             };
@@ -1262,21 +1258,25 @@ fn try_redeem(
 #[allow(clippy::too_many_arguments)]
 fn try_transfer_impl(
     deps: &mut DepsMut,
+    env: &Env,
     sender: &Addr,
     recipient: &Addr,
     amount: Uint128,
     memo: Option<String>,
-    block: &cosmwasm_std::BlockInfo,
     decoys: Option<Vec<Addr>>,
     account_random_pos: Option<usize>,
+    notifications: &mut Vec<Notification>,
 ) -> StdResult<()> {
     perform_transfer(
+        deps.api,
+        env,
         deps.storage,
         sender,
         recipient,
         amount.u128(),
         &decoys,
         &account_random_pos,
+        notifications,
     )?;
 
     let symbol = CONFIG.load(deps.storage)?.symbol;
@@ -1288,7 +1288,7 @@ fn try_transfer_impl(
         amount,
         symbol,
         memo,
-        block,
+        &env.block,
         &decoys,
         &account_random_pos,
     )?;
@@ -1309,18 +1309,25 @@ fn try_transfer(
 ) -> StdResult<Response> {
     let recipient = deps.api.addr_validate(recipient.as_str())?;
 
+    let mut notifications = vec![];
     try_transfer_impl(
         &mut deps,
+        &env,
         &info.sender,
         &recipient,
         amount,
         memo,
-        &env.block,
         decoys,
         account_random_pos,
+        &mut notifications,
     )?;
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?))
+    let mut resp = Response::new().set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?);
+    for notification in notifications {
+        resp = resp.add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext());
+    }
+
+    Ok(resp)
 }
 
 fn try_batch_transfer(
@@ -1332,15 +1339,19 @@ fn try_batch_transfer(
 ) -> StdResult<Response> {
     for action in actions {
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
+
+        //TODO batch transfer notification impl
+        let mut notifications = vec![];
         try_transfer_impl(
             &mut deps,
+            &env,
             &info.sender,
             &recipient,
             action.amount,
             action.memo,
-            &env.block,
             action.decoys,
             account_random_pos,
+            &mut notifications,
         )?;
     }
 
@@ -1384,26 +1395,28 @@ fn try_add_receiver_api_callback(
 #[allow(clippy::too_many_arguments)]
 fn try_send_impl(
     deps: &mut DepsMut,
+    env: &Env,
     messages: &mut Vec<CosmosMsg>,
+    notifications: &mut Vec<Notification>,
     sender: Addr,
     recipient: Addr,
     recipient_code_hash: Option<String>,
     amount: Uint128,
     memo: Option<String>,
     msg: Option<Binary>,
-    block: &cosmwasm_std::BlockInfo,
     decoys: Option<Vec<Addr>>,
     account_random_pos: Option<usize>,
 ) -> StdResult<()> {
     try_transfer_impl(
         deps,
+        &env,
         &sender,
         &recipient,
         amount,
         memo.clone(),
-        block,
         decoys,
         account_random_pos,
+        notifications,
     )?;
 
     try_add_receiver_api_callback(
@@ -1437,23 +1450,30 @@ fn try_send(
     let recipient = deps.api.addr_validate(recipient.as_str())?;
 
     let mut messages = vec![];
+    let mut notifications = vec![];
     try_send_impl(
         &mut deps,
+        &env,
         &mut messages,
+        &mut notifications,
         info.sender,
         recipient,
         recipient_code_hash,
         amount,
         memo,
         msg,
-        &env.block,
         decoys,
         account_random_pos,
     )?;
 
-    Ok(Response::new()
+    let mut resp = Response::new()
         .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::Send { status: Success })?))
+        .set_data(to_binary(&ExecuteAnswer::Send { status: Success })?);
+    for notification in notifications {
+        resp = resp.add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext());
+    }
+
+    Ok(resp)
 }
 
 fn try_batch_send(
@@ -1466,16 +1486,20 @@ fn try_batch_send(
     let mut messages = vec![];
     for action in actions {
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
+
+        // TODO send batch notification
+        let mut notifications = vec![];
         try_send_impl(
             &mut deps,
+            &env,
             &mut messages,
+            &mut notifications,
             info.sender.clone(),
             recipient,
             action.recipient_code_hash,
             action.amount,
             action.memo,
             action.msg,
-            &env.block,
             action.decoys,
             account_random_pos,
         )?;
@@ -1539,18 +1563,22 @@ fn try_transfer_from_impl(
     memo: Option<String>,
     decoys: Option<Vec<Addr>>,
     account_random_pos: Option<usize>,
+    notifications: &mut Vec<Notification>,
 ) -> StdResult<()> {
     let raw_amount = amount.u128();
 
     use_allowance(deps.storage, env, owner, spender, raw_amount)?;
 
     perform_transfer(
+        deps.api,
+        env,
         deps.storage,
         owner,
         recipient,
         raw_amount,
         &decoys,
         &account_random_pos,
+        notifications,
     )?;
 
     let symbol = CONFIG.load(deps.storage)?.symbol;
@@ -1584,6 +1612,7 @@ fn try_transfer_from(
 ) -> StdResult<Response> {
     let owner = deps.api.addr_validate(owner.as_str())?;
     let recipient = deps.api.addr_validate(recipient.as_str())?;
+    let mut notifications = vec![];
     try_transfer_from_impl(
         &mut deps,
         env,
@@ -1594,9 +1623,15 @@ fn try_transfer_from(
         memo,
         decoys,
         account_random_pos,
+        &mut notifications,
     )?;
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::TransferFrom { status: Success })?))
+    let mut resp = Response::new().set_data(to_binary(&ExecuteAnswer::TransferFrom { status: Success })?);
+    for notification in notifications {
+        resp = resp.add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext());
+    }
+
+    Ok(resp)
 }
 
 fn try_batch_transfer_from(
@@ -1609,6 +1644,9 @@ fn try_batch_transfer_from(
     for action in actions {
         let owner = deps.api.addr_validate(action.owner.as_str())?;
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
+
+        // TODO batch transfer notification
+        let mut notifications = vec![];
         try_transfer_from_impl(
             &mut deps,
             env,
@@ -1619,6 +1657,7 @@ fn try_batch_transfer_from(
             action.memo,
             action.decoys,
             account_random_pos,
+            &mut notifications,
         )?;
     }
 
@@ -1635,6 +1674,7 @@ fn try_send_from_impl(
     env: Env,
     info: &MessageInfo,
     messages: &mut Vec<CosmosMsg>,
+    notifications: &mut Vec<Notification>,
     owner: Addr,
     recipient: Addr,
     recipient_code_hash: Option<String>,
@@ -1655,6 +1695,7 @@ fn try_send_from_impl(
         memo.clone(),
         decoys,
         account_random_pos,
+        notifications,
     )?;
 
     try_add_receiver_api_callback(
@@ -1689,11 +1730,13 @@ fn try_send_from(
     let owner = deps.api.addr_validate(owner.as_str())?;
     let recipient = deps.api.addr_validate(recipient.as_str())?;
     let mut messages = vec![];
+    let mut notifications = vec![];
     try_send_from_impl(
         &mut deps,
         env,
         info,
         &mut messages,
+        &mut notifications,
         owner,
         recipient,
         recipient_code_hash,
@@ -1704,9 +1747,14 @@ fn try_send_from(
         account_random_pos,
     )?;
 
-    Ok(Response::new()
+    let mut resp = Response::new()
         .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::SendFrom { status: Success })?))
+        .set_data(to_binary(&ExecuteAnswer::SendFrom { status: Success })?);
+    for notification in notifications {
+        resp = resp.add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext());
+    }
+
+    Ok(resp)
 }
 
 fn try_batch_send_from(
@@ -1721,11 +1769,15 @@ fn try_batch_send_from(
     for action in actions {
         let owner = deps.api.addr_validate(action.owner.as_str())?;
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
+
+        // TODO send batch notification
+        let mut notifications = vec![];
         try_send_from_impl(
             &mut deps,
             env.clone(),
             info,
             &mut messages,
+            &mut notifications,
             owner,
             recipient,
             action.recipient_code_hash,
@@ -2070,15 +2122,18 @@ fn try_burn(
 }
 
 fn perform_transfer(
+    api: &dyn Api,
+    env: &Env,
     store: &mut dyn Storage,
     from: &Addr,
     to: &Addr,
     amount: u128,
     decoys: &Option<Vec<Addr>>,
     account_random_pos: &Option<usize>,
+    notifications: &mut Vec<Notification>,
 ) -> StdResult<()> {
-    BalancesStore::update_balance(store, from, amount, false, "transfer", &None, &None)?;
-    BalancesStore::update_balance(
+    let sender_balance = BalancesStore::update_balance(store, from, amount, false, "transfer", &None, &None)?;
+    let recipient_balance = BalancesStore::update_balance(
         store,
         to,
         amount,
@@ -2087,6 +2142,65 @@ fn perform_transfer(
         decoys,
         account_random_pos,
     )?;
+
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let sender_raw = api.addr_canonicalize(from.as_str())?;
+    let recipient_raw = api.addr_canonicalize(to.as_str())?;
+    let channel = RECEIVED_TOKENS_CHANNEL_ID.to_string();
+
+    // get notification id for receiver
+    let received_id = notification_id(store, &recipient_raw, &channel, &tx_hash)?;
+
+    // use CBOR to encode data
+    let received_data = cbor::to_vec(&(
+        amount.to_be_bytes(),
+        sender_raw.as_slice(),
+        recipient_balance.to_be_bytes(),
+    )).map_err(|e| 
+        StdError::generic_err(format!("{:?}", e))
+    )?;
+
+    // encrypt the receiver message
+    let received_encrypted_data = encrypt_notification_data(
+        store,
+        env.block.height,
+        &tx_hash,
+        &recipient_raw,
+        &channel,
+        received_data
+    )?;
+
+    notifications.push(Notification {
+        id: received_id,
+        encrypted_data: received_encrypted_data,
+    });
+
+    // get notification id for spent
+    let spent_id = notification_id(store, &sender_raw, &channel, &tx_hash)?;
+
+    // use CBOR to encode data
+    let spent_data = cbor::to_vec(&(
+        amount.to_be_bytes(),
+        sender_raw.as_slice(),
+        sender_balance.to_be_bytes(),
+    )).map_err(|e| 
+        StdError::generic_err(format!("{:?}", e))
+    )?;
+
+    // encrypt the receiver message
+    let spent_encrypted_data = encrypt_notification_data(
+        store,
+        env.block.height,
+        &tx_hash,
+        &sender_raw,
+        &channel,
+        spent_data
+    )?;
+
+    notifications.push(Notification {
+        id: spent_id,
+        encrypted_data: spent_encrypted_data,
+    });
 
     Ok(())
 }
@@ -2129,123 +2243,22 @@ fn is_valid_symbol(symbol: &str) -> bool {
 // *****************
 
 /// 
-/// Execute UpdateSeed message
-/// 
-///   Allows clients to set a new shared secret. In order to guarantee the provided 
-///   secret has high entropy, clients must submit a signed document params and signature 
-///   to be verified before the new shared secret (i.e., the signature) is accepted.
-/// 
-///   Updates the sender's seed with the signature of the `signed_doc`. The signed doc
-///   is validated to make sure:
-///   - the signature is verified, 
-///   - that the sender was the signer of the doc, 
-///   - the `contract` field matches the address of this contract
-///   - the `previous_seed` field matches the previous seed stored in the contract
-/// 
-pub fn try_update_seed(
-    deps: DepsMut,
-    env: Env,
-    sender: &Addr,
-    signed_doc: SignedDocument,
-) -> StdResult<Response> {
-    let account = validate_signed_doc(deps.api, &signed_doc, None)?;
-
-    if sender.as_str() != account {
-        return Err(StdError::generic_err("Signed doc is not signed by sender"));
-    }
-
-    if signed_doc.params.contract != env.contract.address.as_str() {
-        return Err(StdError::generic_err(
-            "Signed doc is not for this contract",
-        ));
-    }
-
-    let sender_raw = deps.api.addr_canonicalize(sender.as_str())?;
-
-    let previous_seed = get_seed(deps.storage, &sender_raw)?;
-    if previous_seed != signed_doc.params.previous_seed {
-        return Err(StdError::generic_err("Previous seed does not match previous seed in signed doc"));
-    }
-
-    let new_seed = sha_256(&signed_doc.signature.signature.0).to_vec();
-
-    store_seed(deps.storage, &sender_raw, new_seed)?;
-
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::UpdateSeed {
-        seed: signed_doc.signature.signature,
-    })?))
-}
-
-///
-/// fn validate_signed_doc
-/// 
-///   Validates a signed doc to verify the signature is correct. Returns the account
-///   derived from the public key.
-/// 
-fn validate_signed_doc(
-    api: &dyn Api,
-    signed_doc: &SignedDocument,
-    hrp: Option<&str>,
-) -> StdResult<String> {
-    let account_hrp = hrp.unwrap_or("secret");
-
-    // Derive account from pubkey
-    let pubkey = &signed_doc.signature.pub_key.value;
-
-    let base32_addr = pubkey_to_account(pubkey).0.as_slice().to_base32();
-    let account: String = bech32::encode(account_hrp, base32_addr, Variant::Bech32).unwrap();
-
-    let signed_bytes = to_binary(&Document::from_params(&signed_doc.params))?;
-    let signed_bytes_hash = sha_256(signed_bytes.as_slice());
-
-    let verified = api
-        .secp256k1_verify(
-            &signed_bytes_hash, 
-            &signed_doc.signature.signature.0, 
-            &pubkey.0
-        ).map_err(|err| StdError::generic_err(err.to_string()))?;
-    
-    if !verified {
-        return Err(StdError::generic_err(
-            "Failed to verify signatures for the given signed doc",
-        ));
-    }
-
-    Ok(account)
-}
-
-/// 
 /// fn notification_id
 /// 
 ///   Returns a notification id for the given address and channel id.
-/// 
-/// pseudocode:
-/// 
-/// fun notificationIDFor(contractOrRecipientAddr, channelId) {
-///   // counter reflects the nth notification for the given contract/recipient in the given channel
-///   let counter := getCounterFor(contractOrRecipientAddr, channelId)
-///
-///   // compute notification ID for this event
-///   let seed := getSeedFor(contractOrRecipientAddr)
-///   let material := concatStrings(channelId, ":", uintToDecimalString(counter))
-///   let notificationID := hmac_sha256(key=seed, message=utf8ToBytes(material))
-///
-///   return notificationID
-/// }
 /// 
 fn notification_id(
     storage: &dyn Storage,
     addr: &CanonicalAddr,
     channel: &String,
+    tx_hash: &String,
 ) -> StdResult<Binary> {
-    let counter = get_count(storage, channel, addr);
-
     // compute notification ID for this event
     let seed = get_seed(storage, addr)?;
     let material = [
         channel.as_bytes(),
         ":".as_bytes(),
-        counter.to_string().as_bytes()
+        tx_hash.as_bytes()
     ].concat();
 
     let mut mac: HmacSha256 = HmacSha256::new_from_slice(seed.0.as_slice()).unwrap();
@@ -2260,59 +2273,23 @@ fn notification_id(
 /// 
 ///   Returns encrypted bytes given plaintext bytes, address, and channel id.
 /// 
-/// pseudocode:
-/// 
-/// fun encryptNotificationData(recipientAddr, channelId, plaintext, env) {
-///   // counter reflects the nth notification for the given recipient in the given channel
-///   let counter := getCounterFor(recipientAddr, channelId)
-///
-///   let seed := getSeedFor(recipientAddr)
-///
-///   // ChaCha20 expects a 96-bit (12 bytes) nonce
-///   // take the first 12 bytes of the channel id's sha256 hash
-///   let channelIdBytes := slice(sha256(utf8ToBytes(channelId)), 0, 12)
-///
-///   // encode uint64 counter in BE and left-pad with 4 bytes of 0x00
-///   let counterBytes := concat(zeros(4), uint64BigEndian(counter))
-///
-///   // produce the nonce by XOR'ing the two previous 12-byte results
-///   let nonce := xorBytes(channelIdBytes, counterBytes)
-///
-///   // right-pad the plaintext with 0x00 bytes until it is of the desired length (keep in mind, payload adds 16 bytes for tag)
-///   let message := concat(plaintext, zeros(DATA_LEN - len(plaintext)))
-///
-///   // construct the additional authenticated data
-///   let aad := concatStrings(env.blockHeight, ":", env.senderAddress)
-///
-///   // encrypt notification data for this event
-///   let [ciphertext, tag] := chacha20poly1305_encrypt(key=seed, nonce=nonce, message=message, aad=aad)
-///
-///   // concatenate ciphertext and 16 bytes of tag (note: crypto libs typically default to doing it this way in `seal`)
-///   let payload := concat(ciphertext, tag)
-///
-///   return payload
-/// }
-/// 
-
 fn encrypt_notification_data(
     storage: &dyn Storage,
-    env: &Env,
-    sender: &Addr,
+    block_height: u64,
+    tx_hash: &String,
     recipient: &CanonicalAddr,
     channel: &String,
     plaintext: Vec<u8>,
 ) -> StdResult<Binary> {
-    let counter = get_count(storage, channel, recipient);
     let mut padded_plaintext = plaintext.clone();
-    zero_pad(&mut padded_plaintext, RESPONSE_BLOCK_SIZE);
+    zero_pad(&mut padded_plaintext, NOTIFICATION_BLOCK_SIZE);
 
     let seed = get_seed(storage, recipient)?;
+
     let channel_id_bytes = sha_256(channel.as_bytes())[..12].to_vec();
-    let counter_bytes = [&[0_u8, 0_u8, 0_u8, 0_u8], counter.to_be_bytes().as_slice()].concat();
-    let nonce: Vec<u8> = channel_id_bytes.iter().zip(counter_bytes.iter()).map(|(&b1, &b2)| b1 ^ b2 ).collect();
-    // TODO: add option to use tx hash instead of sender in aad
-    //       requires tx hash to be added to `env`
-    let aad = format!("{}:{}", env.block.height, sender.to_string());
+    let salt_bytes = tx_hash.as_bytes()[..12].to_vec();
+    let nonce: Vec<u8> = channel_id_bytes.iter().zip(salt_bytes.iter()).map(|(&b1, &b2)| b1 ^ b2 ).collect();
+    let aad = format!("{}:{}", block_height, tx_hash);
 
     // encrypt notification data for this event
     let tag_ciphertext = cipher_data(
@@ -2355,26 +2332,47 @@ fn query_list_channels(deps: Deps) -> StdResult<Binary> {
 ///
 /// ChannelInfo query
 /// 
-///   Authenticated query allows clients to obtain the seed, counter, 
-///   and Notification ID of a future event, for a specific channel.
+///   Authenticated query allows clients to obtain the seed, 
+///   and Notification ID of an event for a specific tx_hash, for a specific channel.
 /// 
 fn query_channel_info(
     deps: Deps,
-    env: &Env,
     channel: String,
     sender_raw: CanonicalAddr,
 ) -> StdResult<Binary> {
-    let next_id = notification_id(deps.storage, &sender_raw, &channel)?;
-    let counter = Uint64::from(get_count(deps.storage, &channel, &sender_raw));
     let schema = CHANNEL_SCHEMATA.get(deps.storage, &channel);
 
     to_binary(&QueryAnswer::ChannelInfo { 
         channel,
-        seed: get_seed(deps.storage, &sender_raw)?, 
-        counter, 
-        next_id, 
-        as_of_block: Uint64::from(env.block.height),
+        seed: get_seed(deps.storage, &sender_raw)?,
+        mode: "txhash".to_string(),
+        counter: None,
+        next_id: None, 
         cddl: schema,
+    })
+}
+
+fn decoy_notification(
+    api: &dyn Api,
+    env: &Env,
+    store: &mut dyn Storage,
+    channel: String,
+) -> StdResult<Notification> {
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let contract_raw = api.addr_canonicalize(env.contract.address.as_str())?;
+    let id = notification_id(store, &contract_raw, &channel, &tx_hash)?;
+    let data = vec![];
+    let encrypted_data = encrypt_notification_data(
+        store,
+        env.block.height,
+        &tx_hash,
+        &contract_raw,
+        &channel,
+        data
+    )?;
+    Ok(Notification{
+        id,
+        encrypted_data,
     })
 }
 
