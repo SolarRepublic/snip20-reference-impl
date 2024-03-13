@@ -1,10 +1,13 @@
+use std::collections::HashMap;
+
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128,
+    entry_point, to_binary, Addr, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, QueryRequest, Response, StdError, StdResult, Storage, Uint128
 };
 use minicbor_ser as cbor;
 use hkdf::hmac::Mac;
+use primitive_types::{U256, U512};
 use rand::RngCore;
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
 use secret_toolkit::utils::{pad_handle_result, pad_query_result};
@@ -12,8 +15,8 @@ use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{sha_256, ContractPrng, SHA256_HASH_SIZE};
 
 use crate::batch;
-use crate::channel::{Channel, Notification, CHANNELS, CHANNEL_SCHEMATA, RECEIVED_TOKENS_CHANNEL_ID, RECEIVED_TOKENS_CHANNEL_SCHEMA, SPENT_TOKENS_CHANNEL_ID, SPENT_TOKENS_CHANNEL_SCHEMA, UPDATED_ALLOWANCE_CHANNEL_ID, UPDATED_ALLOWANCE_CHANNEL_SCHEMA};
-use crate::crypto::{HmacSha256, cipher_data, hkdf_sha_256};
+use crate::channel::{notification_id, update_batch_notifications_to_final_balance, Channel, Notification, ReceivedTokensNotification, SpentTokensNotification, UpdatedAllowanceNotification, CHANNELS, CHANNEL_SCHEMATA, RECEIVED_TOKENS_CHANNEL_ID, RECEIVED_TOKENS_CHANNEL_SCHEMA, SPENT_TOKENS_CHANNEL_ID, SPENT_TOKENS_CHANNEL_SCHEMA, UPDATED_ALLOWANCE_CHANNEL_ID, UPDATED_ALLOWANCE_CHANNEL_SCHEMA};
+use crate::crypto::{cipher_data, hkdf_sha_256, hkdf_sha_512, xor_bytes, HmacSha256};
 use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, Decoyable, Evaporator,
     ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit,
@@ -21,7 +24,7 @@ use crate::msg::{
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    get_seed, safe_add, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, CONTRACT_STATUS, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY
+    get_seed, safe_add, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, CONTRACT_STATUS, SEED_LEN, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY
 };
 use crate::transaction_history::{
     store_burn, store_deposit, store_mint, store_redeem, store_transfer, StoredExtendedTx,
@@ -31,7 +34,12 @@ use crate::transaction_history::{
 /// We make sure that responses from `handle` are padded to a multiple of this size.
 pub const RESPONSE_BLOCK_SIZE: usize = 256;
 pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
-pub const NOTIFICATION_BLOCK_SIZE: usize = 32;
+pub const NOTIFICATION_BLOCK_SIZE: usize = 36;
+// Canonical addr for public key 0x0000...
+pub const BURN_ADDR: [u8; 20] = [
+    0x29, 0xcf, 0xc6, 0x37, 0x62, 0x55, 0xa7, 0x84, 0x51, 0xee, 
+    0xb4, 0xb1, 0x29, 0xed, 0x8e, 0xac, 0xff, 0xa2, 0xfe, 0xef
+];
 
 #[entry_point]
 pub fn instantiate(
@@ -154,11 +162,12 @@ pub fn instantiate(
     let internal_secret = hkdf_sha_256(
         &salt, 
         rng_seed.0.as_slice(), 
-        "contract_internal_secret".as_bytes()
+        "contract_internal_secret".as_bytes(),
+        SEED_LEN,
     )?;
     SNIP52_INTERNAL_SECRET.save(
         deps.storage, 
-        &internal_secret.to_vec()
+        &internal_secret
     )?;
 
     // Hard-coded channels
@@ -576,8 +585,8 @@ fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<
             }
             query_allowances_received(deps, account, page.unwrap_or(0), page_size)
         }
-        QueryWithPermit::ChannelInfo { channel } => {
-            query_channel_info(deps, channel, deps.api.addr_canonicalize(account.as_str())?
+        QueryWithPermit::ChannelInfo { channels, txhash } => {
+            query_channel_info(deps, channels, txhash, deps.api.addr_canonicalize(account.as_str())?
             )
         }
     }
@@ -631,8 +640,8 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
                     page_size,
                     ..
                 } => query_allowances_received(deps, spender, page.unwrap_or(0), page_size),
-                QueryMsg::ChannelInfo { channel, viewer } => {
-                    query_channel_info(deps, channel, deps.api.addr_canonicalize(viewer.address.as_str())?)
+                QueryMsg::ChannelInfo { channels, txhash, viewer } => {
+                    query_channel_info(deps, channels, txhash, deps.api.addr_canonicalize(viewer.address.as_str())?)
                 },
                 _ => panic!("This query type does not require authentication"),
             };
@@ -1265,18 +1274,14 @@ fn try_transfer_impl(
     memo: Option<String>,
     decoys: Option<Vec<Addr>>,
     account_random_pos: Option<usize>,
-    notifications: &mut Vec<Notification>,
-) -> StdResult<()> {
-    perform_transfer(
-        deps.api,
-        env,
+) -> StdResult<(ReceivedTokensNotification, SpentTokensNotification)> {
+    let (received_tokens_notification, spent_tokens_notification) = perform_transfer(
         deps.storage,
         sender,
         recipient,
         amount.u128(),
         &decoys,
         &account_random_pos,
-        notifications,
     )?;
 
     let symbol = CONFIG.load(deps.storage)?.symbol;
@@ -1293,7 +1298,7 @@ fn try_transfer_impl(
         &account_random_pos,
     )?;
 
-    Ok(())
+    Ok((received_tokens_notification, spent_tokens_notification))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1309,8 +1314,7 @@ fn try_transfer(
 ) -> StdResult<Response> {
     let recipient = deps.api.addr_validate(recipient.as_str())?;
 
-    let mut notifications = vec![];
-    try_transfer_impl(
+    let (received_tokens_notification, spent_tokens_notification) = try_transfer_impl(
         &mut deps,
         &env,
         &info.sender,
@@ -1319,15 +1323,27 @@ fn try_transfer(
         memo,
         decoys,
         account_random_pos,
-        &mut notifications,
     )?;
 
-    let mut resp = Response::new().set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?);
-    for notification in notifications {
-        resp = resp.add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext());
-    }
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let received_tokens_notification = received_tokens_notification.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
+    let spent_tokens_notification = spent_tokens_notification.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
 
-    Ok(resp)
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?)
+        .add_attribute_plaintext(received_tokens_notification.id_plaintext(), received_tokens_notification.data_plaintext())
+        .add_attribute_plaintext(spent_tokens_notification.id_plaintext(), spent_tokens_notification.data_plaintext())
+    )
 }
 
 fn try_batch_transfer(
@@ -1337,12 +1353,10 @@ fn try_batch_transfer(
     actions: Vec<batch::TransferAction>,
     account_random_pos: Option<usize>,
 ) -> StdResult<Response> {
+    let mut notifications = vec![];
     for action in actions {
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
-
-        //TODO batch transfer notification impl
-        let mut notifications = vec![];
-        try_transfer_impl(
+        let (received_tokens_notification, spent_tokens_notification) = try_transfer_impl(
             &mut deps,
             &env,
             &info.sender,
@@ -1351,8 +1365,91 @@ fn try_batch_transfer(
             action.memo,
             action.decoys,
             account_random_pos,
-            &mut notifications,
         )?;
+        notifications.push((received_tokens_notification, spent_tokens_notification));
+    }
+
+    let notifications = update_batch_notifications_to_final_balance(notifications);
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+
+    let mut received_bloom_filter: U512 = U512::from(0);
+    let mut spent_bloom_filter: U512 = U512::from(0);
+    let mut received_packets: Vec<Vec<u8>> = vec![];
+    for notification in &notifications {
+        // contribute to received bloom filter
+        let recipient_addr_raw = deps.api.addr_canonicalize(notification.0.notification_for.as_str())?;
+        let id = notification_id(
+            deps.storage, 
+            &recipient_addr_raw, 
+            &RECEIVED_TOKENS_CHANNEL_ID.to_string(), 
+            &tx_hash
+        )?;
+        let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
+        for _ in 0..15 {
+            let bit_index = (hash_bytes & U256::from(0x01ff)).as_usize();
+            received_bloom_filter = received_bloom_filter | (U512::from(1) << bit_index);
+            hash_bytes = hash_bytes >> 9;
+        }
+
+        // make the received packet
+        let mut received_packet_plaintext: Vec<u8> = vec![];
+        // amount bytes (u128 == 16 bytes)
+        received_packet_plaintext.extend_from_slice(&notification.0.amount.to_be_bytes());
+        // balance bytes (u128 == 16 bytes)
+        received_packet_plaintext.extend_from_slice(&notification.0.balance.to_be_bytes());
+        // sender account bytes (CAnonicalAddr == 20 bytes)
+        let sender_raw = deps.api.addr_canonicalize(notification.0.sender.as_str())?;
+        let sender_bytes = sender_raw.as_slice();
+        received_packet_plaintext.extend_from_slice(sender_bytes);
+
+        // let packetSize := length(packetPlaintext)
+        // let packetId := slice(notificationId, 0, 8)
+        // let packetIkm := slice(notificationId, 8, 32)
+        // let packetKey
+
+        //if packetSize <= 24:
+        //    packetKey := slice(packetIkm, 0, packetSize)
+        //else:
+        //    packetKey := hkdfSha512(ikm=packetIkm, salt=bytes(64), info="", length=packetSize)
+
+        //let packetCiphertext := xorBytes(packetPlaintext, packetKey)
+        //let packetBytes = concat(packetId, packetCiphertext)
+
+        let received_packet_size = received_packet_plaintext.len();
+        let received_packet_id = &id.0.as_slice()[0..8];
+        let received_packet_ikm = &id.0.as_slice()[8..32];
+        let received_packet_key = hkdf_sha_512(&Some(vec![0u8; 64]), received_packet_ikm, "".as_bytes(), received_packet_size)?;
+        let received_packet_ciphertext = xor_bytes(received_packet_plaintext.as_slice(), received_packet_key.as_slice());
+        let received_packet_bytes: Vec<u8> = [received_packet_id.to_vec(), received_packet_ciphertext].concat();
+
+        //let packetBytes = concat(packetCiphertext, packetId)
+
+
+        let spender_addr_raw = deps.api.addr_canonicalize(notification.1.notification_for.as_str())?;
+        let id = notification_id(
+            deps.storage, 
+            &spender_addr_raw, 
+            &SPENT_TOKENS_CHANNEL_ID.to_string(), 
+            &tx_hash
+        )?;
+        let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
+        for _ in 0..15 {
+            let bit_index = (hash_bytes & U256::from(0x01ff)).as_usize();
+            spent_bloom_filter = spent_bloom_filter | (U512::from(1) << bit_index);
+            hash_bytes = hash_bytes >> 9;
+        }
+
+        // TODO: sender version 
+    }
+
+    let mut received_bloom_filter_bytes: Vec<u8> = vec![];
+    for biguint in received_bloom_filter.0 {
+        received_bloom_filter_bytes.extend_from_slice(&biguint.to_be_bytes());
+    }
+
+    let mut spent_bloom_filter_bytes: Vec<u8> = vec![];
+    for biguint in spent_bloom_filter.0 {
+        spent_bloom_filter_bytes.extend_from_slice(&biguint.to_be_bytes());
     }
 
     Ok(
@@ -1397,7 +1494,6 @@ fn try_send_impl(
     deps: &mut DepsMut,
     env: &Env,
     messages: &mut Vec<CosmosMsg>,
-    notifications: &mut Vec<Notification>,
     sender: Addr,
     recipient: Addr,
     recipient_code_hash: Option<String>,
@@ -1406,8 +1502,8 @@ fn try_send_impl(
     msg: Option<Binary>,
     decoys: Option<Vec<Addr>>,
     account_random_pos: Option<usize>,
-) -> StdResult<()> {
-    try_transfer_impl(
+) -> StdResult<(ReceivedTokensNotification, SpentTokensNotification)> {
+    let (received_tokens_notification, spent_tokens_notification) = try_transfer_impl(
         deps,
         &env,
         &sender,
@@ -1416,7 +1512,6 @@ fn try_send_impl(
         memo.clone(),
         decoys,
         account_random_pos,
-        notifications,
     )?;
 
     try_add_receiver_api_callback(
@@ -1431,7 +1526,7 @@ fn try_send_impl(
         memo,
     )?;
 
-    Ok(())
+    Ok((received_tokens_notification, spent_tokens_notification))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1450,12 +1545,10 @@ fn try_send(
     let recipient = deps.api.addr_validate(recipient.as_str())?;
 
     let mut messages = vec![];
-    let mut notifications = vec![];
-    try_send_impl(
+    let (received_tokens_notification, spent_tokens_notification) = try_send_impl(
         &mut deps,
         &env,
         &mut messages,
-        &mut notifications,
         info.sender,
         recipient,
         recipient_code_hash,
@@ -1466,14 +1559,26 @@ fn try_send(
         account_random_pos,
     )?;
 
-    let mut resp = Response::new()
-        .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::Send { status: Success })?);
-    for notification in notifications {
-        resp = resp.add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext());
-    }
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let received_tokens_notification = received_tokens_notification.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
+    let spent_tokens_notification = spent_tokens_notification.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
 
-    Ok(resp)
+    Ok(Response::new()
+        .add_messages(messages)
+        .set_data(to_binary(&ExecuteAnswer::Send { status: Success })?)
+        .add_attribute_plaintext(received_tokens_notification.id_plaintext(), received_tokens_notification.data_plaintext())
+        .add_attribute_plaintext(spent_tokens_notification.id_plaintext(), spent_tokens_notification.data_plaintext())
+    )
 }
 
 fn try_batch_send(
@@ -1488,12 +1593,10 @@ fn try_batch_send(
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
 
         // TODO send batch notification
-        let mut notifications = vec![];
-        try_send_impl(
+        let (received_tokens_notification, spent_tokens_notification) = try_send_impl(
             &mut deps,
             &env,
             &mut messages,
-            &mut notifications,
             info.sender.clone(),
             recipient,
             action.recipient_code_hash,
@@ -1563,22 +1666,18 @@ fn try_transfer_from_impl(
     memo: Option<String>,
     decoys: Option<Vec<Addr>>,
     account_random_pos: Option<usize>,
-    notifications: &mut Vec<Notification>,
-) -> StdResult<()> {
+) -> StdResult<(ReceivedTokensNotification, SpentTokensNotification)> {
     let raw_amount = amount.u128();
 
     use_allowance(deps.storage, env, owner, spender, raw_amount)?;
 
-    perform_transfer(
-        deps.api,
-        env,
+    let (received_tokens_notification, spent_tokens_notification) = perform_transfer(
         deps.storage,
         owner,
         recipient,
         raw_amount,
         &decoys,
         &account_random_pos,
-        notifications,
     )?;
 
     let symbol = CONFIG.load(deps.storage)?.symbol;
@@ -1595,7 +1694,7 @@ fn try_transfer_from_impl(
         &account_random_pos,
     )?;
 
-    Ok(())
+    Ok((received_tokens_notification, spent_tokens_notification))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1612,8 +1711,7 @@ fn try_transfer_from(
 ) -> StdResult<Response> {
     let owner = deps.api.addr_validate(owner.as_str())?;
     let recipient = deps.api.addr_validate(recipient.as_str())?;
-    let mut notifications = vec![];
-    try_transfer_from_impl(
+    let (received_tokens_notification, spent_tokens_notification) = try_transfer_from_impl(
         &mut deps,
         env,
         &info.sender,
@@ -1623,15 +1721,27 @@ fn try_transfer_from(
         memo,
         decoys,
         account_random_pos,
-        &mut notifications,
     )?;
 
-    let mut resp = Response::new().set_data(to_binary(&ExecuteAnswer::TransferFrom { status: Success })?);
-    for notification in notifications {
-        resp = resp.add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext());
-    }
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let received_tokens_notification = received_tokens_notification.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
+    let spent_tokens_notification = spent_tokens_notification.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
 
-    Ok(resp)
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::TransferFrom { status: Success })?)
+        .add_attribute_plaintext(received_tokens_notification.id_plaintext(), received_tokens_notification.data_plaintext())
+        .add_attribute_plaintext(spent_tokens_notification.id_plaintext(), spent_tokens_notification.data_plaintext())
+    )
 }
 
 fn try_batch_transfer_from(
@@ -1646,8 +1756,7 @@ fn try_batch_transfer_from(
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
 
         // TODO batch transfer notification
-        let mut notifications = vec![];
-        try_transfer_from_impl(
+        let (received_tokens_notification, spent_tokens_notification) = try_transfer_from_impl(
             &mut deps,
             env,
             &info.sender,
@@ -1657,7 +1766,6 @@ fn try_batch_transfer_from(
             action.memo,
             action.decoys,
             account_random_pos,
-            &mut notifications,
         )?;
     }
 
@@ -1671,10 +1779,9 @@ fn try_batch_transfer_from(
 #[allow(clippy::too_many_arguments)]
 fn try_send_from_impl(
     deps: &mut DepsMut,
-    env: Env,
+    env: &Env,
     info: &MessageInfo,
     messages: &mut Vec<CosmosMsg>,
-    notifications: &mut Vec<Notification>,
     owner: Addr,
     recipient: Addr,
     recipient_code_hash: Option<String>,
@@ -1683,9 +1790,9 @@ fn try_send_from_impl(
     msg: Option<Binary>,
     decoys: Option<Vec<Addr>>,
     account_random_pos: Option<usize>,
-) -> StdResult<()> {
+) -> StdResult<(ReceivedTokensNotification, SpentTokensNotification)> {
     let spender = info.sender.clone();
-    try_transfer_from_impl(
+    let (received_tokens_notification, spent_tokens_notification) = try_transfer_from_impl(
         deps,
         &env,
         &spender,
@@ -1695,7 +1802,6 @@ fn try_send_from_impl(
         memo.clone(),
         decoys,
         account_random_pos,
-        notifications,
     )?;
 
     try_add_receiver_api_callback(
@@ -1710,7 +1816,7 @@ fn try_send_from_impl(
         memo,
     )?;
 
-    Ok(())
+    Ok((received_tokens_notification, spent_tokens_notification))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1730,13 +1836,11 @@ fn try_send_from(
     let owner = deps.api.addr_validate(owner.as_str())?;
     let recipient = deps.api.addr_validate(recipient.as_str())?;
     let mut messages = vec![];
-    let mut notifications = vec![];
-    try_send_from_impl(
+    let (received_tokens_notification, spent_tokens_notification) = try_send_from_impl(
         &mut deps,
-        env,
+        &env,
         info,
         &mut messages,
-        &mut notifications,
         owner,
         recipient,
         recipient_code_hash,
@@ -1747,14 +1851,26 @@ fn try_send_from(
         account_random_pos,
     )?;
 
-    let mut resp = Response::new()
-        .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::SendFrom { status: Success })?);
-    for notification in notifications {
-        resp = resp.add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext());
-    }
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let received_tokens_notification = received_tokens_notification.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height.clone(),
+        &tx_hash,
+    )?;
+    let spent_tokens_notification = spent_tokens_notification.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
 
-    Ok(resp)
+    Ok(Response::new()
+        .add_messages(messages)
+        .set_data(to_binary(&ExecuteAnswer::SendFrom { status: Success })?)
+        .add_attribute_plaintext(received_tokens_notification.id_plaintext(), received_tokens_notification.data_plaintext())
+        .add_attribute_plaintext(spent_tokens_notification.id_plaintext(), spent_tokens_notification.data_plaintext())
+    )
 }
 
 fn try_batch_send_from(
@@ -1771,13 +1887,11 @@ fn try_batch_send_from(
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
 
         // TODO send batch notification
-        let mut notifications = vec![];
-        try_send_from_impl(
+        let (received_tokens_notification, spent_tokens_notification) = try_send_from_impl(
             &mut deps,
-            env.clone(),
+            &env,
             info,
             &mut messages,
-            &mut notifications,
             owner,
             recipient,
             action.recipient_code_hash,
@@ -1793,7 +1907,8 @@ fn try_batch_send_from(
         .add_messages(messages)
         .set_data(to_binary(&ExecuteAnswer::BatchSendFrom {
             status: Success,
-        })?))
+        })?)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1818,7 +1933,7 @@ fn try_burn_from(
     let raw_amount = amount.u128();
     use_allowance(deps.storage, env, &owner, &info.sender, raw_amount)?;
 
-    BalancesStore::update_balance(
+    let new_balance = BalancesStore::update_balance(
         deps.storage,
         &owner,
         raw_amount,
@@ -1842,7 +1957,7 @@ fn try_burn_from(
 
     store_burn(
         deps.storage,
-        owner,
+        owner.clone(),
         info.sender,
         amount,
         constants.symbol,
@@ -1852,7 +1967,23 @@ fn try_burn_from(
         &account_random_pos,
     )?;
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::BurnFrom { status: Success })?))
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let spent_tokens_notification = SpentTokensNotification{
+        notification_for: owner,
+        amount: raw_amount,
+        recipient: None,
+        balance: new_balance,
+    }.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
+
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BurnFrom { status: Success })?)
+        .add_attribute_plaintext(spent_tokens_notification.id_plaintext(), spent_tokens_notification.data_plaintext())
+    )
 }
 
 fn try_batch_burn_from(
@@ -1946,36 +2077,12 @@ fn try_increase_allowance(
     AllowancesStore::save(deps.storage, &info.sender, &spender, &allowance)?;
 
     let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
-    let allower_raw = deps.api.addr_canonicalize(info.sender.as_str())?;
-    let recipient_raw = deps.api.addr_canonicalize(spender.as_str())?;
-    let channel = UPDATED_ALLOWANCE_CHANNEL_ID.to_string();
-
-    // get notification id for receiver of allowance
-    let updated_allowance_id = notification_id(deps.storage, &recipient_raw, &channel, &tx_hash)?;
-
-    // use CBOR to encode data
-    let updated_allowance_data = cbor::to_vec(&(
-        new_amount.to_be_bytes(),
-        allower_raw.as_slice(),
-        expiration.unwrap_or_default(),
-    )).map_err(|e| 
-        StdError::generic_err(format!("{:?}", e))
-    )?;
-
-    // encrypt the updated allowance message
-    let updated_allowance_encrypted_data = encrypt_notification_data(
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-        &recipient_raw,
-        &channel,
-        updated_allowance_data
-    )?;
-
-    let notification = Notification {
-        id: updated_allowance_id,
-        encrypted_data: updated_allowance_encrypted_data,
-    };
+    let notification = UpdatedAllowanceNotification {
+        notification_for: spender.clone(),
+        amount: new_amount,
+        allower: info.sender.clone(),
+        expiration,
+    }.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(
         Response::new()
@@ -2016,36 +2123,12 @@ fn try_decrease_allowance(
     AllowancesStore::save(deps.storage, &info.sender, &spender, &allowance)?;
 
     let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
-    let allower_raw = deps.api.addr_canonicalize(info.sender.as_str())?;
-    let recipient_raw = deps.api.addr_canonicalize(spender.as_str())?;
-    let channel = UPDATED_ALLOWANCE_CHANNEL_ID.to_string();
-
-    // get notification id for receiver of allowance
-    let updated_allowance_id = notification_id(deps.storage, &recipient_raw, &channel, &tx_hash)?;
-
-    // use CBOR to encode data
-    let updated_allowance_data = cbor::to_vec(&(
-        new_amount.to_be_bytes(),
-        allower_raw.as_slice(),
-        expiration.unwrap_or_default(),
-    )).map_err(|e| 
-        StdError::generic_err(format!("{:?}", e))
-    )?;
-
-    // encrypt the updated allowance message
-    let updated_allowance_encrypted_data = encrypt_notification_data(
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-        &recipient_raw,
-        &channel,
-        updated_allowance_data
-    )?;
-
-    let notification = Notification {
-        id: updated_allowance_id,
-        encrypted_data: updated_allowance_encrypted_data,
-    };
+    let notification = UpdatedAllowanceNotification {
+        notification_for: spender.clone(),
+        amount: new_amount,
+        allower: info.sender.clone(),
+        expiration,
+    }.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(
         Response::new()
@@ -2154,7 +2237,7 @@ fn try_burn(
 
     let raw_amount = amount.u128();
 
-    BalancesStore::update_balance(
+    let new_balance = BalancesStore::update_balance(
         deps.storage,
         &info.sender,
         raw_amount,
@@ -2177,7 +2260,7 @@ fn try_burn(
     store_burn(
         deps.storage,
         info.sender.clone(),
-        info.sender,
+        info.sender.clone(),
         amount,
         constants.symbol,
         memo,
@@ -2186,20 +2269,33 @@ fn try_burn(
         &account_random_pos,
     )?;
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Burn { status: Success })?))
+    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let spent_tokens_notification = SpentTokensNotification{
+        notification_for: info.sender,
+        amount: raw_amount,
+        recipient: None,
+        balance: new_balance,
+    }.to_notification(
+        deps.api,
+        deps.storage,
+        env.block.height,
+        &tx_hash,
+    )?;
+
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::Burn { status: Success })?)
+        .add_attribute_plaintext(spent_tokens_notification.id_plaintext(), spent_tokens_notification.data_plaintext())
+    )
 }
 
 fn perform_transfer(
-    api: &dyn Api,
-    env: &Env,
     store: &mut dyn Storage,
     from: &Addr,
     to: &Addr,
     amount: u128,
     decoys: &Option<Vec<Addr>>,
     account_random_pos: &Option<usize>,
-    notifications: &mut Vec<Notification>,
-) -> StdResult<()> {
+) -> StdResult<(ReceivedTokensNotification, SpentTokensNotification)> {
     let sender_balance = BalancesStore::update_balance(store, from, amount, false, "transfer", &None, &None)?;
     let recipient_balance = BalancesStore::update_balance(
         store,
@@ -2211,66 +2307,21 @@ fn perform_transfer(
         account_random_pos,
     )?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
-    let sender_raw = api.addr_canonicalize(from.as_str())?;
-    let recipient_raw = api.addr_canonicalize(to.as_str())?;
-    let channel = RECEIVED_TOKENS_CHANNEL_ID.to_string();
-
-    // get notification id for receiver
-    let received_id = notification_id(store, &recipient_raw, &channel, &tx_hash)?;
-
-    // use CBOR to encode data
-    let received_data = cbor::to_vec(&(
-        amount.to_be_bytes(),
-        sender_raw.as_slice(),
-        recipient_balance.to_be_bytes(),
-    )).map_err(|e| 
-        StdError::generic_err(format!("{:?}", e))
-    )?;
-
-    // encrypt the receiver message
-    let received_encrypted_data = encrypt_notification_data(
-        store,
-        env.block.height,
-        &tx_hash,
-        &recipient_raw,
-        &channel,
-        received_data
-    )?;
-
-    notifications.push(Notification {
-        id: received_id,
-        encrypted_data: received_encrypted_data,
-    });
-
-    // get notification id for spent
-    let spent_id = notification_id(store, &sender_raw, &channel, &tx_hash)?;
-
-    // use CBOR to encode data
-    let spent_data = cbor::to_vec(&(
-        amount.to_be_bytes(),
-        sender_raw.as_slice(),
-        sender_balance.to_be_bytes(),
-    )).map_err(|e| 
-        StdError::generic_err(format!("{:?}", e))
-    )?;
-
-    // encrypt the receiver message
-    let spent_encrypted_data = encrypt_notification_data(
-        store,
-        env.block.height,
-        &tx_hash,
-        &sender_raw,
-        &channel,
-        spent_data
-    )?;
-
-    notifications.push(Notification {
-        id: spent_id,
-        encrypted_data: spent_encrypted_data,
-    });
-
-    Ok(())
+    Ok((
+        ReceivedTokensNotification {
+            notification_for: to.clone(),
+            amount,
+            sender: from.clone(),
+            balance: recipient_balance,
+            
+        },
+        SpentTokensNotification {
+            notification_for: from.clone(),
+            amount,
+            recipient: Some(to.clone()),
+            balance: sender_balance,
+        },
+    ))
 }
 
 fn revoke_permit(deps: DepsMut, info: MessageInfo, permit_name: String) -> StdResult<Response> {
@@ -2310,80 +2361,6 @@ fn is_valid_symbol(symbol: &str) -> bool {
 // SNIP-52 functions
 // *****************
 
-/// 
-/// fn notification_id
-/// 
-///   Returns a notification id for the given address and channel id.
-/// 
-fn notification_id(
-    storage: &dyn Storage,
-    addr: &CanonicalAddr,
-    channel: &String,
-    tx_hash: &String,
-) -> StdResult<Binary> {
-    // compute notification ID for this event
-    let seed = get_seed(storage, addr)?;
-    let material = [
-        channel.as_bytes(),
-        ":".as_bytes(),
-        tx_hash.as_bytes()
-    ].concat();
-
-    let mut mac: HmacSha256 = HmacSha256::new_from_slice(seed.0.as_slice()).unwrap();
-    mac.update(material.as_slice());
-    let result = mac.finalize();
-    let code_bytes = result.into_bytes();
-    Ok(Binary::from(code_bytes.as_slice()))
-}
-
-/// 
-/// fn encrypt_notification_data
-/// 
-///   Returns encrypted bytes given plaintext bytes, address, and channel id.
-/// 
-fn encrypt_notification_data(
-    storage: &dyn Storage,
-    block_height: u64,
-    tx_hash: &String,
-    recipient: &CanonicalAddr,
-    channel: &String,
-    plaintext: Vec<u8>,
-) -> StdResult<Binary> {
-    let mut padded_plaintext = plaintext.clone();
-    zero_pad(&mut padded_plaintext, NOTIFICATION_BLOCK_SIZE);
-
-    let seed = get_seed(storage, recipient)?;
-
-    let channel_id_bytes = sha_256(channel.as_bytes())[..12].to_vec();
-    let salt_bytes = tx_hash.as_bytes()[..12].to_vec();
-    let nonce: Vec<u8> = channel_id_bytes.iter().zip(salt_bytes.iter()).map(|(&b1, &b2)| b1 ^ b2 ).collect();
-    let aad = format!("{}:{}", block_height, tx_hash);
-
-    // encrypt notification data for this event
-    let tag_ciphertext = cipher_data(
-        seed.0.as_slice(),
-        nonce.as_slice(),
-        padded_plaintext.as_slice(),
-        aad.as_bytes()
-    )?;
-
-    Ok(Binary::from(tag_ciphertext.clone()))
-}
-
-/// Take a Vec<u8> and pad it up to a multiple of `block_size`, using 0x00 at the end.
-fn zero_pad(message: &mut Vec<u8>, block_size: usize) -> &mut Vec<u8> {
-    let len = message.len();
-    let surplus = len % block_size;
-    if surplus == 0 {
-        return message;
-    }
-
-    let missing = block_size - surplus;
-    message.reserve(missing);
-    message.extend(std::iter::repeat(0x00).take(missing));
-    message
-}
-
 ///
 /// ListChannels query
 /// 
@@ -2405,43 +2382,21 @@ fn query_list_channels(deps: Deps) -> StdResult<Binary> {
 /// 
 fn query_channel_info(
     deps: Deps,
-    channel: String,
+    channels: Vec<String>,
+    txhash: Option<String>,
     sender_raw: CanonicalAddr,
 ) -> StdResult<Binary> {
-    let schema = CHANNEL_SCHEMATA.get(deps.storage, &channel);
+    Ok(Binary(vec![]))
+    //let schema = CHANNEL_SCHEMATA.get(deps.storage, &channel);
 
-    to_binary(&QueryAnswer::ChannelInfo { 
-        channel,
-        seed: get_seed(deps.storage, &sender_raw)?,
-        mode: "txhash".to_string(),
-        counter: None,
-        next_id: None, 
-        cddl: schema,
-    })
-}
-
-fn decoy_notification(
-    api: &dyn Api,
-    env: &Env,
-    store: &mut dyn Storage,
-    channel: String,
-) -> StdResult<Notification> {
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
-    let contract_raw = api.addr_canonicalize(env.contract.address.as_str())?;
-    let id = notification_id(store, &contract_raw, &channel, &tx_hash)?;
-    let data = vec![];
-    let encrypted_data = encrypt_notification_data(
-        store,
-        env.block.height,
-        &tx_hash,
-        &contract_raw,
-        &channel,
-        data
-    )?;
-    Ok(Notification{
-        id,
-        encrypted_data,
-    })
+    //to_binary(&QueryAnswer::ChannelInfo { 
+    //    channel,
+    //    seed: get_seed(deps.storage, &sender_raw)?,
+    //    mode: "txhash".to_string(),
+    //    counter: None,
+    //    next_id: None, 
+    //    cddl: schema,
+    //})
 }
 
 // *****************

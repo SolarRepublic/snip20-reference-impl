@@ -1,5 +1,5 @@
 use hkdf::{hmac::Hmac, Hkdf};
-use sha2::Sha256;
+use sha2::{Sha256, Sha512};
 use chacha20poly1305::{
     aead::{AeadInPlace, KeyInit,},
     ChaCha20Poly1305,
@@ -30,11 +30,29 @@ pub fn cipher_data(
     Ok(buffer)
 }
 
-pub fn hkdf_sha_256(salt: &Option<Vec<u8>>, ikm: &[u8], info: &[u8]) -> StdResult<[u8;32]> {
+pub fn hkdf_sha_256(salt: &Option<Vec<u8>>, ikm: &[u8], info: &[u8], length: usize) -> StdResult<Vec<u8>> {
     let hk: Hkdf<Sha256> = Hkdf::<Sha256>::new(salt.as_deref().map(|s| s), ikm);
-    let mut okm = [0u8; 32];
+    let mut zero_bytes = vec![0u8; length];
+    let mut okm = zero_bytes.as_mut_slice();
     match hk.expand(info, &mut okm) {
-        Ok(_) => { Ok(okm) }
+        Ok(_) => { Ok(okm.to_vec()) }
         Err(e) => { return Err(StdError::generic_err(format!("{:?}", e))); }
     }
+}
+
+pub fn hkdf_sha_512(salt: &Option<Vec<u8>>, ikm: &[u8], info: &[u8], length: usize) -> StdResult<Vec<u8>> {
+    let hk: Hkdf<Sha512> = Hkdf::<Sha512>::new(salt.as_deref().map(|s| s), ikm);
+    let mut zero_bytes = vec![0u8; length];
+    let mut okm = zero_bytes.as_mut_slice();
+    match hk.expand(info, &mut okm) {
+        Ok(_) => { Ok(okm.to_vec()) }
+        Err(e) => { return Err(StdError::generic_err(format!("{:?}", e))); }
+    }
+}
+
+pub fn xor_bytes(vec1: &[u8], vec2: &[u8]) -> Vec<u8> {
+    vec1.iter()
+        .zip(vec2.iter())
+        .map(|(&a, &b)| a ^ b)
+        .collect()
 }

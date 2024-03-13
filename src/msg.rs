@@ -565,7 +565,8 @@ pub enum QueryMsg {
     /// Authenticated query allows clients to obtain the seed 
     /// and schema for a specific channel.
     ChannelInfo {
-        channel: String,
+        channels: Vec<String>,
+        txhash: Option<String>,
         viewer: ViewerInfo,
     },
     WithPermit {
@@ -658,7 +659,8 @@ pub enum QueryWithPermit {
 
     // SNIP-52 Private Push Notifications
     ChannelInfo {
-        channel: String,
+        channels: Vec<String>,
+        txhash: Option<String>,
     },
 }
 
@@ -725,19 +727,68 @@ pub enum QueryAnswer {
         channels: Vec<String>,
     },
     ChannelInfo {
-        /// same as query input
-        channel: String,
-        /// shared secret in base64
-        seed: Binary,
-        /// "counter" or "txhash"
-        mode: String,
-        /// current counter value (not used)
-        counter: Option<Uint64>,
-        /// the next Notification ID (not used)
-        next_id: Option<Binary>,
-        /// optional CDDL schema definition string for the CBOR-encoded notification data
-        cddl: Option<String>,
+        as_of_block: Uint64,
+        channels: Vec<ChannelInfoData>,
     },
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct ChannelInfoData {
+    /// same as query input
+    channel: String,
+    /// shared secret in base64
+    seed: Binary,
+    /// "counter", "txhash", "bloom"
+    mode: String,
+
+    /// txhash / bloom fields only
+    /// if txhash argument was given, this will be its computed Notification ID
+    answer_id: Option<Binary>,
+
+    /// bloom fields only
+    /// bloom filter parameters
+    parameters: Option<BloomParameters>,
+    /// bloom filter data
+    data: Option<Descriptor>,
+
+    /// counter fields only
+    /// current counter value
+    counter: Option<Uint64>,
+    /// the next Notification ID
+    next_id: Option<Binary>,
+
+    /// counter / txhash field only
+    /// optional CDDL schema definition string for the CBOR-encoded notification data
+    cddl: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct BloomParameters {
+    m: u32,
+    k: u32,
+    h: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct Descriptor {
+    r#type: String,
+    version: String,
+    packet_size: u32,
+    data: StructDescriptor,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct StructDescriptor {
+    r#type: String,
+    label: String,
+    members: Vec<FlatDescriptor>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct FlatDescriptor {
+    r#type: String,
+    label: String,
+    description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]

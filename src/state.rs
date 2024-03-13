@@ -326,6 +326,7 @@ impl ReceiverHashStore {
 // SNIP-52 Private Push Notifications
 
 pub static SNIP52_INTERNAL_SECRET: Item<Vec<u8>> = Item::new(b"snip52-secret");
+pub const SEED_LEN: usize = 32;
 
 /// get the seed for a given address
 pub fn get_seed(
@@ -335,7 +336,8 @@ pub fn get_seed(
     let seed = hkdf_sha_256(
         &None, 
         SNIP52_INTERNAL_SECRET.load(storage)?.as_slice(), 
-        addr.as_slice()
+        addr.as_slice(),
+        SEED_LEN,
     )?;
     Binary::from_base64(&general_purpose::STANDARD.encode(seed))
 }
