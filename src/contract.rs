@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, QueryRequest, Response, StdError, StdResult, Storage, Uint128
+    entry_point, to_binary, Addr, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, 
+    StdError, StdResult, Storage, Uint128, Uint64
 };
-use minicbor_ser as cbor;
-use hkdf::hmac::Mac;
 use primitive_types::{U256, U512};
 use rand::RngCore;
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
@@ -15,8 +12,12 @@ use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{sha_256, ContractPrng, SHA256_HASH_SIZE};
 
 use crate::batch;
-use crate::channel::{notification_id, update_batch_notifications_to_final_balance, Channel, Notification, ReceivedTokensNotification, SpentTokensNotification, UpdatedAllowanceNotification, CHANNELS, CHANNEL_SCHEMATA, RECEIVED_TOKENS_CHANNEL_ID, RECEIVED_TOKENS_CHANNEL_SCHEMA, SPENT_TOKENS_CHANNEL_ID, SPENT_TOKENS_CHANNEL_SCHEMA, UPDATED_ALLOWANCE_CHANNEL_ID, UPDATED_ALLOWANCE_CHANNEL_SCHEMA};
-use crate::crypto::{cipher_data, hkdf_sha_256, hkdf_sha_512, xor_bytes, HmacSha256};
+use crate::channel::{notification_id, update_batch_notifications_to_final_balance, ReceivedTokensNotification, 
+    SpentTokensNotification, UpdatedAllowanceNotification, CHANNELS, RECEIVED_TOKENS_CHANNEL_ID, RECEIVED_TOKENS_CHANNEL_SCHEMA, 
+    SPENT_TOKENS_CHANNEL_ID, SPENT_TOKENS_CHANNEL_SCHEMA, UPDATED_ALLOWANCE_CHANNEL_ID, UPDATED_ALLOWANCE_CHANNEL_SCHEMA
+};
+use crate::crypto::{hkdf_sha_256, hkdf_sha_512, xor_bytes,};
+use crate::msg::ChannelInfoData;
 use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, Decoyable, Evaporator,
     ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit,
@@ -24,7 +25,8 @@ use crate::msg::{
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    get_seed, safe_add, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, CONTRACT_STATUS, SEED_LEN, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY
+    get_seed, safe_add, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, 
+    CONTRACT_STATUS, SEED_LEN, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY
 };
 use crate::transaction_history::{
     store_burn, store_deposit, store_mint, store_redeem, store_transfer, StoredExtendedTx,
@@ -171,23 +173,14 @@ pub fn instantiate(
     )?;
 
     // Hard-coded channels
-    let channels: Vec<Channel> = vec![
-        Channel {
-            id: RECEIVED_TOKENS_CHANNEL_ID.to_string(),
-            schema: Some(RECEIVED_TOKENS_CHANNEL_SCHEMA.to_string()),
-        },
-        Channel {
-            id: SPENT_TOKENS_CHANNEL_ID.to_string(),
-            schema: Some(SPENT_TOKENS_CHANNEL_SCHEMA.to_string()),
-        },
-        Channel {
-            id: UPDATED_ALLOWANCE_CHANNEL_ID.to_string(),
-            schema: Some(UPDATED_ALLOWANCE_CHANNEL_SCHEMA.to_string()),
-        },
+    let channels: Vec<String> = vec![
+        RECEIVED_TOKENS_CHANNEL_ID.to_string(),
+        SPENT_TOKENS_CHANNEL_ID.to_string(),
+        UPDATED_ALLOWANCE_CHANNEL_ID.to_string(),
     ];
 
     channels.into_iter().for_each(|channel| {
-        channel.store(deps.storage).unwrap()
+        CHANNELS.insert(deps.storage, &channel);
     });
 
     // TODO: Do we want to update viewing key derivation?
@@ -444,7 +437,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
 }
 
 #[entry_point]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     pad_query_result(
         match msg {
             QueryMsg::TokenInfo {} => query_token_info(deps.storage),
@@ -452,15 +445,15 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             QueryMsg::ContractStatus {} => query_contract_status(deps.storage),
             QueryMsg::ExchangeRate {} => query_exchange_rate(deps.storage),
             QueryMsg::Minters { .. } => query_minters(deps),
-            QueryMsg::WithPermit { permit, query } => permit_queries(deps, permit, query),
+            QueryMsg::WithPermit { permit, query } => permit_queries(deps, env, permit, query),
             QueryMsg::ListChannels{} => query_list_channels(deps),
-            _ => viewing_keys_queries(deps, msg),
+            _ => viewing_keys_queries(deps, env, msg),
         },
         RESPONSE_BLOCK_SIZE,
     )
 }
 
-fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<Binary, StdError> {
+fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) -> Result<Binary, StdError> {
     // Validate permit content
     let token_address = CONFIG.load(deps.storage)?.contract_address;
 
@@ -586,13 +579,12 @@ fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<
             query_allowances_received(deps, account, page.unwrap_or(0), page_size)
         }
         QueryWithPermit::ChannelInfo { channels, txhash } => {
-            query_channel_info(deps, channels, txhash, deps.api.addr_canonicalize(account.as_str())?
-            )
+            query_channel_info(deps, env, channels, txhash, deps.api.addr_canonicalize(account.as_str())?)
         }
     }
 }
 
-pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
+pub fn viewing_keys_queries(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     let (addresses, key) = msg.get_validation_params(deps.api)?;
 
     for address in addresses {
@@ -641,7 +633,7 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
                     ..
                 } => query_allowances_received(deps, spender, page.unwrap_or(0), page_size),
                 QueryMsg::ChannelInfo { channels, txhash, viewer } => {
-                    query_channel_info(deps, channels, txhash, deps.api.addr_canonicalize(viewer.address.as_str())?)
+                    query_channel_info(deps, env, channels, txhash, deps.api.addr_canonicalize(viewer.address.as_str())?)
                 },
                 _ => panic!("This query type does not require authentication"),
             };
@@ -1375,6 +1367,7 @@ fn try_batch_transfer(
     let mut received_bloom_filter: U512 = U512::from(0);
     let mut spent_bloom_filter: U512 = U512::from(0);
     let mut received_packets: Vec<Vec<u8>> = vec![];
+    let mut spent_packets: Vec<Vec<u8>> = vec![];
     for notification in &notifications {
         // contribute to received bloom filter
         let recipient_addr_raw = deps.api.addr_canonicalize(notification.0.notification_for.as_str())?;
@@ -1402,28 +1395,13 @@ fn try_batch_transfer(
         let sender_bytes = sender_raw.as_slice();
         received_packet_plaintext.extend_from_slice(sender_bytes);
 
-        // let packetSize := length(packetPlaintext)
-        // let packetId := slice(notificationId, 0, 8)
-        // let packetIkm := slice(notificationId, 8, 32)
-        // let packetKey
-
-        //if packetSize <= 24:
-        //    packetKey := slice(packetIkm, 0, packetSize)
-        //else:
-        //    packetKey := hkdfSha512(ikm=packetIkm, salt=bytes(64), info="", length=packetSize)
-
-        //let packetCiphertext := xorBytes(packetPlaintext, packetKey)
-        //let packetBytes = concat(packetId, packetCiphertext)
-
         let received_packet_size = received_packet_plaintext.len();
         let received_packet_id = &id.0.as_slice()[0..8];
         let received_packet_ikm = &id.0.as_slice()[8..32];
         let received_packet_key = hkdf_sha_512(&Some(vec![0u8; 64]), received_packet_ikm, "".as_bytes(), received_packet_size)?;
         let received_packet_ciphertext = xor_bytes(received_packet_plaintext.as_slice(), received_packet_key.as_slice());
         let received_packet_bytes: Vec<u8> = [received_packet_id.to_vec(), received_packet_ciphertext].concat();
-
-        //let packetBytes = concat(packetCiphertext, packetId)
-
+        received_packets.push(received_packet_bytes);
 
         let spender_addr_raw = deps.api.addr_canonicalize(notification.1.notification_for.as_str())?;
         let id = notification_id(
@@ -1439,7 +1417,30 @@ fn try_batch_transfer(
             hash_bytes = hash_bytes >> 9;
         }
 
-        // TODO: sender version 
+        // make the spent packet
+        let mut spent_packet_plaintext: Vec<u8> = vec![];
+        // amount bytes (u128 == 16 bytes)
+        spent_packet_plaintext.extend_from_slice(&notification.1.amount.to_be_bytes());
+        // balance bytes (u128 == 16 bytes)
+        spent_packet_plaintext.extend_from_slice(&notification.1.balance.to_be_bytes());
+        // recipient account bytes (CAnonicalAddr == 20 bytes)
+        let recipient_bytes: &[u8];
+        let recipient_raw;
+        if let Some(recipient) = &notification.1.recipient {
+            recipient_raw = deps.api.addr_canonicalize(recipient.as_str())?;
+            recipient_bytes = recipient_raw.as_slice();
+        } else {
+            recipient_bytes = &BURN_ADDR;
+        }
+        spent_packet_plaintext.extend_from_slice(recipient_bytes);
+
+        let spent_packet_size = spent_packet_plaintext.len();
+        let spent_packet_id = &id.0.as_slice()[0..8];
+        let spent_packet_ikm = &id.0.as_slice()[8..32];
+        let spent_packet_key = hkdf_sha_512(&Some(vec![0u8; 64]), spent_packet_ikm, "".as_bytes(), spent_packet_size)?;
+        let spent_packet_ciphertext = xor_bytes(spent_packet_plaintext.as_slice(), spent_packet_key.as_slice());
+        let spent_packet_bytes: Vec<u8> = [spent_packet_id.to_vec(), spent_packet_ciphertext].concat(); 
+        spent_packets.push(spent_packet_bytes);
     }
 
     let mut received_bloom_filter_bytes: Vec<u8> = vec![];
@@ -2382,21 +2383,85 @@ fn query_list_channels(deps: Deps) -> StdResult<Binary> {
 /// 
 fn query_channel_info(
     deps: Deps,
+    env: Env,
     channels: Vec<String>,
     txhash: Option<String>,
     sender_raw: CanonicalAddr,
 ) -> StdResult<Binary> {
-    Ok(Binary(vec![]))
+    let mut channels_data = vec![];
+    for channel in channels {
+        match channel.as_str() {
+            RECEIVED_TOKENS_CHANNEL_ID => {
+                let answer_id;
+                if let Some(tx_hash) = &txhash {
+                    answer_id = Some(notification_id(deps.storage, &sender_raw, &channel, tx_hash)?);
+                } else {
+                    answer_id = None;
+                }
+                let channel_info_data = ChannelInfoData {
+                    mode: "txhash".to_string(),
+                    channel,
+                    answer_id,
+                    parameters: None,
+                    data: None,
+                    next_id: None,
+                    counter: None,
+                    cddl: Some(RECEIVED_TOKENS_CHANNEL_SCHEMA.to_string()),
+                };
+                channels_data.push(channel_info_data);
+            },
+            SPENT_TOKENS_CHANNEL_ID => {
+                let answer_id;
+                if let Some(tx_hash) = &txhash {
+                    answer_id = Some(notification_id(deps.storage, &sender_raw, &channel, tx_hash)?);
+                } else {
+                    answer_id = None;
+                }
+                let channel_info_data = ChannelInfoData {
+                    mode: "txhash".to_string(),
+                    channel,
+                    answer_id,
+                    parameters: None,
+                    data: None,
+                    next_id: None,
+                    counter: None,
+                    cddl: Some(SPENT_TOKENS_CHANNEL_SCHEMA.to_string()),
+                };
+                channels_data.push(channel_info_data);
+            },
+            UPDATED_ALLOWANCE_CHANNEL_ID => {
+                let answer_id;
+                if let Some(tx_hash) = &txhash {
+                    answer_id = Some(notification_id(deps.storage, &sender_raw, &channel, tx_hash)?);
+                } else {
+                    answer_id = None;
+                }
+                let channel_info_data = ChannelInfoData {
+                    mode: "txhash".to_string(),
+                    channel,
+                    answer_id,
+                    parameters: None,
+                    data: None,
+                    next_id: None,
+                    counter: None,
+                    cddl: Some(UPDATED_ALLOWANCE_CHANNEL_SCHEMA.to_string()),
+                };
+                channels_data.push(channel_info_data);
+            },
+            _ => {
+                return Err(StdError::generic_err(format!("`{}` channel is undefined", channel)));
+            }
+        }
+    }
+
+    //Ok(Binary(vec![]))
     //let schema = CHANNEL_SCHEMATA.get(deps.storage, &channel);
 
-    //to_binary(&QueryAnswer::ChannelInfo { 
-    //    channel,
-    //    seed: get_seed(deps.storage, &sender_raw)?,
-    //    mode: "txhash".to_string(),
-    //    counter: None,
-    //    next_id: None, 
-    //    cddl: schema,
-    //})
+    to_binary(&QueryAnswer::ChannelInfo { 
+        as_of_block: Uint64::from(env.block.height),
+        channels: channels_data,
+        seed: get_seed(deps.storage, &sender_raw)?,
+    })
 }
 
 // *****************

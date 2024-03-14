@@ -727,7 +727,10 @@ pub enum QueryAnswer {
         channels: Vec<String>,
     },
     ChannelInfo {
+        /// scopes validity of this response
         as_of_block: Uint64,
+        /// shared secret in base64
+        seed: Binary,
         channels: Vec<ChannelInfoData>,
     },
 }
@@ -735,31 +738,29 @@ pub enum QueryAnswer {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct ChannelInfoData {
     /// same as query input
-    channel: String,
-    /// shared secret in base64
-    seed: Binary,
+    pub channel: String,
     /// "counter", "txhash", "bloom"
-    mode: String,
+    pub mode: String,
 
     /// txhash / bloom fields only
     /// if txhash argument was given, this will be its computed Notification ID
-    answer_id: Option<Binary>,
+    pub answer_id: Option<Binary>,
 
     /// bloom fields only
     /// bloom filter parameters
-    parameters: Option<BloomParameters>,
+    pub parameters: Option<BloomParameters>,
     /// bloom filter data
-    data: Option<Descriptor>,
+    pub data: Option<Descriptor>,
 
     /// counter fields only
     /// current counter value
-    counter: Option<Uint64>,
+    pub counter: Option<Uint64>,
     /// the next Notification ID
-    next_id: Option<Binary>,
+    pub next_id: Option<Binary>,
 
     /// counter / txhash field only
     /// optional CDDL schema definition string for the CBOR-encoded notification data
-    cddl: Option<String>,
+    pub cddl: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
