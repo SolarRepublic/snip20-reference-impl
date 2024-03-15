@@ -765,31 +765,31 @@ pub struct ChannelInfoData {
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct BloomParameters {
-    m: u32,
-    k: u32,
-    h: String,
+    pub m: u32,
+    pub k: u32,
+    pub h: String,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct Descriptor {
-    r#type: String,
-    version: String,
-    packet_size: u32,
-    data: StructDescriptor,
+    pub r#type: String,
+    pub version: String,
+    pub packet_size: u32,
+    pub data: StructDescriptor,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct StructDescriptor {
-    r#type: String,
-    label: String,
-    members: Vec<FlatDescriptor>,
+    pub r#type: String,
+    pub label: String,
+    pub members: Vec<FlatDescriptor>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct FlatDescriptor {
-    r#type: String,
-    label: String,
-    description: Option<String>,
+    pub r#type: String,
+    pub label: String,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
