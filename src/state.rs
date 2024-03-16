@@ -1,13 +1,10 @@
-use base64::{engine::general_purpose, Engine};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{Addr, Binary, CanonicalAddr, StdError, StdResult, Storage};
+use cosmwasm_std::{Addr, StdError, StdResult, Storage};
 use secret_toolkit::serialization::Json;
 use secret_toolkit::storage::{Item, Keymap, Keyset};
 use secret_toolkit_crypto::SHA256_HASH_SIZE;
-
-use crate::crypto::hkdf_sha_256;
 use crate::msg::ContractStatusLevel;
 
 pub const KEY_CONFIG: &[u8] = b"config";
@@ -326,15 +323,4 @@ impl ReceiverHashStore {
 // SNIP-52 Private Push Notifications
 
 pub static SNIP52_INTERNAL_SECRET: Item<Vec<u8>> = Item::new(b"snip52-secret");
-pub const SEED_LEN: usize = 32;
 
-/// get the seed for a given address
-pub fn get_seed(storage: &dyn Storage, addr: &CanonicalAddr) -> StdResult<Binary> {
-    let seed = hkdf_sha_256(
-        &None,
-        SNIP52_INTERNAL_SECRET.load(storage)?.as_slice(),
-        addr.as_slice(),
-        SEED_LEN,
-    )?;
-    Binary::from_base64(&general_purpose::STANDARD.encode(seed))
-}

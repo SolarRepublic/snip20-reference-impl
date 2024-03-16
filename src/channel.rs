@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use crate::crypto::{cipher_data, hkdf_sha_512, HmacSha256};
+use crate::crypto::{cipher_data, hkdf_sha_256, hkdf_sha_512, HmacSha256};
 use crate::{
     contract::{NOTIFICATION_BLOCK_SIZE, ZERO_ADDR},
     crypto::xor_bytes,
-    state::get_seed,
 };
-use cosmwasm_std::{Addr, Api, Binary, CanonicalAddr, Env, StdError, StdResult, Storage};
+use base64::{engine::general_purpose, Engine};
+use cosmwasm_std::{Addr, Api, Binary, CanonicalAddr, Env, StdError, StdResult};
 use hkdf::hmac::Mac;
 use minicbor_ser as cbor;
 use primitive_types::{U256, U512};
@@ -41,13 +41,13 @@ impl ReceivedNotification {
     pub fn to_notification(
         self,
         api: &dyn Api,
-        storage: &dyn Storage,
         block_height: u64,
         tx_hash: &String,
+        secret: &[u8],
     ) -> StdResult<TxHashNotification> {
         let notification_for_raw = api.addr_canonicalize(self.notification_for.as_str())?;
         let channel = RECEIVED_CHANNEL_ID.to_string();
-        let seed = get_seed(storage, &notification_for_raw)?;
+        let seed = get_seed(&notification_for_raw, secret)?;
 
         // get notification id for receiver
         let received_id = notification_id(&seed, &channel, &tx_hash)?;
@@ -103,13 +103,13 @@ impl SpentNotification {
     pub fn to_notification(
         self,
         api: &dyn Api,
-        storage: &dyn Storage,
         block_height: u64,
         tx_hash: &String,
+        secret: &[u8],
     ) -> StdResult<TxHashNotification> {
         let notification_for_raw = api.addr_canonicalize(self.notification_for.as_str())?;
         let channel = SPENT_CHANNEL_ID.to_string();
-        let seed = get_seed(storage, &notification_for_raw)?;
+        let seed = get_seed(&notification_for_raw, secret)?;
 
         // get notification id for spent
         let spent_id = notification_id(&seed, &channel, &tx_hash)?;
@@ -173,14 +173,14 @@ impl AllowanceNotification {
     pub fn to_notification(
         self,
         api: &dyn Api,
-        storage: &dyn Storage,
         block_height: u64,
         tx_hash: &String,
+        secret: &[u8],
     ) -> StdResult<TxHashNotification> {
         let notification_for_raw = api.addr_canonicalize(self.notification_for.as_str())?;
         let allower_raw = api.addr_canonicalize(self.allower.as_str())?;
         let channel = ALLOWANCE_CHANNEL_ID.to_string();
-        let seed = get_seed(storage, &notification_for_raw)?;
+        let seed = get_seed(&notification_for_raw, secret)?;
 
         // get notification id for receiver of allowance
         let updated_allowance_id = notification_id(&seed, &channel, &tx_hash)?;
@@ -239,11 +239,11 @@ pub const MULTI_SPENT_CHANNEL_BLOOM_N: u32 = 4;
 pub const MULTI_SPENT_CHANNEL_PACKET_SIZE: u32 = 40;
 
 pub fn multi_received_data(
-    storage: &dyn Storage,
     api: &dyn Api,
     notifications: Vec<ReceivedNotification>,
     tx_hash: &String,
     env_random: Binary,
+    secret: &[u8],
 ) -> StdResult<Vec<u8>> {
     let mut received_bloom_filter: U512 = U512::from(0);
     let mut received_packets: Vec<(Addr, Vec<u8>)> = vec![];
@@ -273,7 +273,7 @@ pub fn multi_received_data(
 
         // contribute to received bloom filter
         let recipient_addr_raw = api.addr_canonicalize(notification.notification_for.as_str())?;
-        let seed = get_seed(storage, &recipient_addr_raw)?;
+        let seed = get_seed(&recipient_addr_raw, secret)?;
         let id = notification_id(&seed, &MULTI_RECEIVED_CHANNEL_ID.to_string(), &tx_hash)?;
         let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
         for _ in 0..MULTI_RECEIVED_CHANNEL_BLOOM_K {
@@ -335,7 +335,7 @@ pub fn multi_received_data(
             let padding_address = &padding_addresses[i * 20..(i + 1) * 20];
 
             // contribute padding packet to bloom filter
-            let seed = get_seed(storage, &CanonicalAddr::from(padding_address))?;
+            let seed = get_seed(&CanonicalAddr::from(padding_address), secret)?;
             let id = notification_id(&seed, &MULTI_RECEIVED_CHANNEL_ID.to_string(), &tx_hash)?;
             let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
             for _ in 0..MULTI_RECEIVED_CHANNEL_BLOOM_K {
@@ -368,11 +368,11 @@ pub fn multi_received_data(
 }
 
 pub fn multi_spent_data(
-    storage: &dyn Storage,
     api: &dyn Api,
     notifications: Vec<SpentNotification>,
     tx_hash: &String,
     env_random: Binary,
+    secret: &[u8],
 ) -> StdResult<Vec<u8>> {
     let mut spent_bloom_filter: U512 = U512::from(0);
     let mut spent_packets: Vec<(Addr, Vec<u8>)> = vec![];
@@ -397,7 +397,7 @@ pub fn multi_spent_data(
         }
 
         let spender_addr_raw = api.addr_canonicalize(notification.notification_for.as_str())?;
-        let seed = get_seed(storage, &spender_addr_raw)?;
+        let seed = get_seed(&spender_addr_raw, secret)?;
         let id = notification_id(&seed, &MULTI_SPENT_CHANNEL_ID.to_string(), &tx_hash)?;
         let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
         for _ in 0..MULTI_SPENT_CHANNEL_BLOOM_K {
@@ -470,7 +470,7 @@ pub fn multi_spent_data(
             let padding_address = &padding_addresses[i * 20..(i + 1) * 20];
 
             // contribute padding packet to bloom filter
-            let seed = get_seed(storage, &CanonicalAddr::from(padding_address))?;
+            let seed = get_seed(&CanonicalAddr::from(padding_address), secret)?;
             let id = notification_id(&seed, &MULTI_SPENT_CHANNEL_ID.to_string(), &tx_hash)?;
             let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
             for _ in 0..MULTI_SPENT_CHANNEL_BLOOM_K {
@@ -565,6 +565,19 @@ pub fn encrypt_notification_data(
     Ok(Binary::from(tag_ciphertext.clone()))
 }
 
+pub const SEED_LEN: usize = 32;
+
+/// get the seed for a secret and given address
+pub fn get_seed(addr: &CanonicalAddr, secret: &[u8]) -> StdResult<Binary> {
+    let seed = hkdf_sha_256(
+        &None,
+        secret,
+        addr.as_slice(),
+        SEED_LEN,
+    )?;
+    Binary::from_base64(&general_purpose::STANDARD.encode(seed))
+}
+
 /// Take a Vec<u8> and pad it up to a multiple of `block_size`, using 0x00 at the end.
 fn zero_pad(message: &mut Vec<u8>, block_size: usize) -> &mut Vec<u8> {
     let len = message.len();
@@ -581,9 +594,9 @@ fn zero_pad(message: &mut Vec<u8>, block_size: usize) -> &mut Vec<u8> {
 
 pub fn decoy_txhash_notification(
     api: &dyn Api,
-    storage: &dyn Storage,
     env: &Env,
     channel: String,
+    secret: &[u8],
 ) -> StdResult<TxHashNotification> {
     let tx_hash = env
         .transaction
@@ -591,7 +604,7 @@ pub fn decoy_txhash_notification(
         .ok_or(StdError::generic_err("no tx hash found"))?
         .hash;
     let contract_raw = api.addr_canonicalize(env.contract.address.as_str())?;
-    let seed = get_seed(storage, &contract_raw)?;
+    let seed = get_seed(&contract_raw, secret)?;
     let id = notification_id(&seed, &channel, &tx_hash)?;
     let data = vec![];
     let encrypted_data =
@@ -622,3 +635,5 @@ pub fn update_batch_spent_notifications_to_final_balance(
 
     notifications
 }
+
+
