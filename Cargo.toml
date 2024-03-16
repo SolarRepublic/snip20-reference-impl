@@ -28,6 +28,7 @@ overflow-checks = true
 # for quicker tests, cargo test --lib
 # for more explicit tests, cargo test --features=backtraces
 #default = ["debug-print"]
+default = []
 backtraces = ["cosmwasm-std/backtraces"]
 
 # debug-print = ["cosmwasm-std/debug-print"]
@@ -35,7 +36,7 @@ backtraces = ["cosmwasm-std/backtraces"]
 cosmwasm-std = { package = "secret-cosmwasm-std", version = "1.1.11"  }
 cosmwasm-storage = { package = "secret-cosmwasm-storage", version = "1.1.11"  }
 rand = { version = "0.8.5", default-features = false }
-secret-toolkit = { version = "0.10.0", default-features = false, features = ["crypto", "permit", "storage", "viewing-key"] }
+secret-toolkit = { version = "0.10.0", default-features = false, features = ["permit", "storage", "viewing-key"] }
 secret-toolkit-crypto = { version = "0.10.0", features = ["rand", "hash"] }
 
 schemars = "0.8.12"
@@ -54,7 +55,7 @@ hkdf = "0.12.3"
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc", "rand_core"] }
 generic-array = "0.14.7"
 subtle = { version = "2.2.3", default-features = false }
-primitive-types = "0.12.2"
+primitive-types = { version = "0.12.2", default-features = false }
 
 [dev-dependencies]
 cosmwasm-schema = { version = "1.1.8" }
