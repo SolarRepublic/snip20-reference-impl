@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::batch;
 use crate::batch::HasDecoy;
 use crate::transaction_history::{ExtendedTx, Tx};
-use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint64, Uint128};
+use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Uint64};
 use secret_toolkit::permit::Permit;
 
 #[cfg_attr(test, derive(Eq, PartialEq))]
@@ -562,7 +562,7 @@ pub enum QueryMsg {
     // SNIP-52 Private Push Notifications
     /// Public query to list all notification channels
     ListChannels {},
-    /// Authenticated query allows clients to obtain the seed 
+    /// Authenticated query allows clients to obtain the seed
     /// and schema for a specific channel.
     ChannelInfo {
         channels: Vec<String>,

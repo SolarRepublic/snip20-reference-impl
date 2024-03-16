@@ -1,7 +1,8 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128, Uint64
+    entry_point, to_binary, Addr, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut,
+    Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128, Uint64,
 };
 use rand::RngCore;
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
@@ -10,19 +11,25 @@ use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{sha_256, ContractPrng, SHA256_HASH_SIZE};
 
 use crate::batch;
-use crate::channel::{multi_received_data, multi_spent_data, notification_id, AllowanceNotification, ReceivedNotification, SpentNotification, ALLOWANCE_CHANNEL_ID, ALLOWANCE_CHANNEL_SCHEMA, CHANNELS, MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_N, MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE, RECEIVED_CHANNEL_ID, RECEIVED_CHANNEL_SCHEMA, SPENT_CHANNEL_ID, SPENT_CHANNEL_SCHEMA
+use crate::channel::{
+    multi_received_data, multi_spent_data, notification_id, AllowanceNotification,
+    ReceivedNotification, SpentNotification, ALLOWANCE_CHANNEL_ID, ALLOWANCE_CHANNEL_SCHEMA,
+    CHANNELS, MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_N,
+    MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K,
+    MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE,
+    RECEIVED_CHANNEL_ID, RECEIVED_CHANNEL_SCHEMA, SPENT_CHANNEL_ID, SPENT_CHANNEL_SCHEMA,
 };
 use crate::crypto::hkdf_sha_256;
-use crate::msg::{BloomParameters, ChannelInfoData, Descriptor, FlatDescriptor, StructDescriptor};
 use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, Decoyable, Evaporator,
     ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit,
     ResponseStatus::Success,
 };
+use crate::msg::{BloomParameters, ChannelInfoData, Descriptor, FlatDescriptor, StructDescriptor};
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    get_seed, safe_add, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, 
-    CONTRACT_STATUS, SEED_LEN, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY
+    get_seed, safe_add, AllowancesStore, BalancesStore, Config, MintersStore, PrngStore,
+    ReceiverHashStore, CONFIG, CONTRACT_STATUS, SEED_LEN, SNIP52_INTERNAL_SECRET, TOTAL_SUPPLY,
 };
 use crate::transaction_history::{
     store_burn, store_deposit, store_mint, store_redeem, store_transfer, StoredExtendedTx,
@@ -37,7 +44,7 @@ pub const NOTIFICATION_BLOCK_SIZE: usize = 36;
 pub const ZERO_ADDR: [u8; 20] = [0u8; 20];
 // Canonical addr for public key 0x0000...
 //pub const BURN_ADDR: [u8; 20] = [
-//    0x29, 0xcf, 0xc6, 0x37, 0x62, 0x55, 0xa7, 0x84, 0x51, 0xee, 
+//    0x29, 0xcf, 0xc6, 0x37, 0x62, 0x55, 0xa7, 0x84, 0x51, 0xee,
 //    0xb4, 0xb1, 0x29, 0xed, 0x8e, 0xac, 0xff, 0xa2, 0xfe, 0xef
 //];
 
@@ -160,15 +167,12 @@ pub fn instantiate(
     // Create SNIP52_INTERNAL_SECRET
     let salt = Some(sha_256(&rng_entropy).to_vec());
     let internal_secret = hkdf_sha_256(
-        &salt, 
-        rng_seed.0.as_slice(), 
+        &salt,
+        rng_seed.0.as_slice(),
         "contract_internal_secret".as_bytes(),
         SEED_LEN,
     )?;
-    SNIP52_INTERNAL_SECRET.save(
-        deps.storage, 
-        &internal_secret
-    )?;
+    SNIP52_INTERNAL_SECRET.save(deps.storage, &internal_secret)?;
 
     // Hard-coded channels
     let channels: Vec<String> = vec![
@@ -185,8 +189,8 @@ pub fn instantiate(
 
     // TODO: Do we want to update viewing key derivation?
     //let vk_seed = hkdf_sha_256(
-    //    &salt, 
-    //    rng_seed.0.as_slice(), 
+    //    &salt,
+    //    rng_seed.0.as_slice(),
     //    "contract_viewing_key".as_bytes()
     //)?;
     //ViewingKey::set_seed(deps.storage, &vk_seed);
@@ -428,7 +432,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         ExecuteMsg::AddSupportedDenoms { denoms, .. } => add_supported_denoms(deps, info, denoms),
         ExecuteMsg::RemoveSupportedDenoms { denoms, .. } => {
             remove_supported_denoms(deps, info, denoms)
-        },
+        }
     };
 
     let padded_result = pad_handle_result(response, RESPONSE_BLOCK_SIZE);
@@ -446,14 +450,19 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             QueryMsg::ExchangeRate {} => query_exchange_rate(deps.storage),
             QueryMsg::Minters { .. } => query_minters(deps),
             QueryMsg::WithPermit { permit, query } => permit_queries(deps, env, permit, query),
-            QueryMsg::ListChannels{} => query_list_channels(deps),
+            QueryMsg::ListChannels {} => query_list_channels(deps),
             _ => viewing_keys_queries(deps, env, msg),
         },
         RESPONSE_BLOCK_SIZE,
     )
 }
 
-fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) -> Result<Binary, StdError> {
+fn permit_queries(
+    deps: Deps,
+    env: Env,
+    permit: Permit,
+    query: QueryWithPermit,
+) -> Result<Binary, StdError> {
     // Validate permit content
     let token_address = CONFIG.load(deps.storage)?.contract_address;
 
@@ -578,9 +587,13 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             }
             query_allowances_received(deps, account, page.unwrap_or(0), page_size)
         }
-        QueryWithPermit::ChannelInfo { channels, txhash } => {
-            query_channel_info(deps, env, channels, txhash, deps.api.addr_canonicalize(account.as_str())?)
-        }
+        QueryWithPermit::ChannelInfo { channels, txhash } => query_channel_info(
+            deps,
+            env,
+            channels,
+            txhash,
+            deps.api.addr_canonicalize(account.as_str())?,
+        ),
     }
 }
 
@@ -632,9 +645,17 @@ pub fn viewing_keys_queries(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Bi
                     page_size,
                     ..
                 } => query_allowances_received(deps, spender, page.unwrap_or(0), page_size),
-                QueryMsg::ChannelInfo { channels, txhash, viewer } => {
-                    query_channel_info(deps, env, channels, txhash, deps.api.addr_canonicalize(viewer.address.as_str())?)
-                },
+                QueryMsg::ChannelInfo {
+                    channels,
+                    txhash,
+                    viewer,
+                } => query_channel_info(
+                    deps,
+                    env,
+                    channels,
+                    txhash,
+                    deps.api.addr_canonicalize(viewer.address.as_str())?,
+                ),
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -928,22 +949,24 @@ fn try_mint(
         account_random_pos,
     )?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
-    let received_notification = ReceivedNotification{
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
+    let received_notification = ReceivedNotification {
         notification_for: recipient,
         amount: minted_amount,
         sender: None,
-    }.to_notification(
-        deps.api,
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-    )?;
+    }
+    .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(Response::new()
         .set_data(to_binary(&ExecuteAnswer::Mint { status: Success })?)
-        .add_attribute_plaintext(received_notification.id_plaintext(), received_notification.data_plaintext())
-    )
+        .add_attribute_plaintext(
+            received_notification.id_plaintext(),
+            received_notification.data_plaintext(),
+        ))
 }
 
 fn try_batch_mint(
@@ -987,29 +1010,34 @@ fn try_batch_mint(
             action.decoys,
             account_random_pos,
         )?;
-        notifications.push(ReceivedNotification{
+        notifications.push(ReceivedNotification {
             notification_for: recipient,
             amount: actual_amount,
             sender: None,
         });
     }
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
     let received_data = multi_received_data(
-        deps.storage, 
-        deps.api, 
-        notifications, 
-        &tx_hash, 
+        deps.storage,
+        deps.api,
+        notifications,
+        &tx_hash,
         env.block.random.unwrap(),
     )?;
 
     TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::BatchMint { status: Success })?)
-            .add_attribute_plaintext(format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID), Binary::from(received_data).to_base64())
-    )
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BatchMint { status: Success })?)
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            Binary::from(received_data).to_base64(),
+        ))
 }
 
 pub fn try_set_key(deps: DepsMut, info: MessageInfo, key: String) -> StdResult<Response> {
@@ -1351,25 +1379,30 @@ fn try_transfer(
         account_random_pos,
     )?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
     let received_notification = received_notification.to_notification(
         deps.api,
         deps.storage,
         env.block.height,
         &tx_hash,
     )?;
-    let spent_notification = spent_notification.to_notification(
-        deps.api,
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-    )?;
+    let spent_notification =
+        spent_notification.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(Response::new()
         .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?)
-        .add_attribute_plaintext(received_notification.id_plaintext(), received_notification.data_plaintext())
-        .add_attribute_plaintext(spent_notification.id_plaintext(), spent_notification.data_plaintext())
-    )
+        .add_attribute_plaintext(
+            received_notification.id_plaintext(),
+            received_notification.data_plaintext(),
+        )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        ))
 }
 
 fn try_batch_transfer(
@@ -1396,18 +1429,26 @@ fn try_batch_transfer(
         notifications.push((received_notification, spent_notification));
     }
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
-    let (received_notifications, spent_notifications): (Vec<ReceivedNotification>, Vec<SpentNotification>) = notifications
-        .into_iter()
-        .unzip();
-    let received_data = multi_received_data(deps.storage, deps.api, received_notifications, &tx_hash, env.block.random.clone().unwrap())?;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
+    let (received_notifications, spent_notifications): (
+        Vec<ReceivedNotification>,
+        Vec<SpentNotification>,
+    ) = notifications.into_iter().unzip();
+    let received_data = multi_received_data(
+        deps.storage,
+        deps.api,
+        received_notifications,
+        &tx_hash,
+        env.block.random.clone().unwrap(),
+    )?;
 
     let total_amount_spent = spent_notifications
         .iter()
-        .fold(0u128, |acc, notification| {
-            acc + notification.amount
-        }
-    );
+        .fold(0u128, |acc, notification| acc + notification.amount);
 
     let spent_notification;
     if spent_notifications.is_empty() {
@@ -1416,8 +1457,9 @@ fn try_batch_transfer(
             amount: 0u128,
             actions: 0u32,
             recipient: None,
-            balance: BalancesStore::load(deps.storage, &info.sender)
-        }.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
+            balance: BalancesStore::load(deps.storage, &info.sender),
+        }
+        .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
     } else {
         spent_notification = SpentNotification {
             notification_for: info.sender,
@@ -1425,15 +1467,22 @@ fn try_batch_transfer(
             actions: num_actions as u32,
             recipient: spent_notifications[0].recipient.clone(),
             balance: spent_notifications.last().unwrap().balance,
-        }.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
+        }
+        .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
     }
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::BatchTransfer { status: Success, })?)
-            .add_attribute_plaintext(format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID), Binary::from(received_data).to_base64())
-            .add_attribute_plaintext(spent_notification.id_plaintext(), spent_notification.data_plaintext())
-    )
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BatchTransfer {
+            status: Success,
+        })?)
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            Binary::from(received_data).to_base64(),
+        )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1536,26 +1585,31 @@ fn try_send(
         account_random_pos,
     )?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
     let received_notification = received_notification.to_notification(
         deps.api,
         deps.storage,
         env.block.height,
         &tx_hash,
     )?;
-    let spent_notification = spent_notification.to_notification(
-        deps.api,
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-    )?;
+    let spent_notification =
+        spent_notification.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(Response::new()
         .add_messages(messages)
         .set_data(to_binary(&ExecuteAnswer::Send { status: Success })?)
-        .add_attribute_plaintext(received_notification.id_plaintext(), received_notification.data_plaintext())
-        .add_attribute_plaintext(spent_notification.id_plaintext(), spent_notification.data_plaintext())
-    )
+        .add_attribute_plaintext(
+            received_notification.id_plaintext(),
+            received_notification.data_plaintext(),
+        )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        ))
 }
 
 fn try_batch_send(
@@ -1588,19 +1642,27 @@ fn try_batch_send(
         notifications.push((received_notification, spent_notification));
     }
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
 
-    let (received_notifications, spent_notifications): (Vec<ReceivedNotification>, Vec<SpentNotification>) = notifications
-        .into_iter()
-        .unzip();
-    let received_data = multi_received_data(deps.storage, deps.api, received_notifications, &tx_hash, env.block.random.clone().unwrap())?;
+    let (received_notifications, spent_notifications): (
+        Vec<ReceivedNotification>,
+        Vec<SpentNotification>,
+    ) = notifications.into_iter().unzip();
+    let received_data = multi_received_data(
+        deps.storage,
+        deps.api,
+        received_notifications,
+        &tx_hash,
+        env.block.random.clone().unwrap(),
+    )?;
 
     let total_amount_spent = spent_notifications
         .iter()
-        .fold(0u128, |acc, notification| {
-            acc + notification.amount
-        }
-    );
+        .fold(0u128, |acc, notification| acc + notification.amount);
 
     let spent_notification;
     if spent_notifications.is_empty() {
@@ -1609,8 +1671,9 @@ fn try_batch_send(
             amount: 0u128,
             actions: 0u32,
             recipient: None,
-            balance: BalancesStore::load(deps.storage, &info.sender)
-        }.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
+            balance: BalancesStore::load(deps.storage, &info.sender),
+        }
+        .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
     } else {
         spent_notification = SpentNotification {
             notification_for: info.sender,
@@ -1618,15 +1681,21 @@ fn try_batch_send(
             actions: num_actions as u32,
             recipient: spent_notifications[0].recipient.clone(),
             balance: spent_notifications.last().unwrap().balance,
-        }.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
+        }
+        .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
     }
 
     Ok(Response::new()
         .add_messages(messages)
         .set_data(to_binary(&ExecuteAnswer::BatchSend { status: Success })?)
-        .add_attribute_plaintext(format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID), Binary::from(received_data).to_base64())
-        .add_attribute_plaintext(spent_notification.id_plaintext(), spent_notification.data_plaintext())
-    )
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            Binary::from(received_data).to_base64(),
+        )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        ))
 }
 
 fn try_register_receive(
@@ -1739,25 +1808,30 @@ fn try_transfer_from(
         account_random_pos,
     )?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
     let received_notification = received_notification.to_notification(
         deps.api,
         deps.storage,
         env.block.height,
         &tx_hash,
     )?;
-    let spent_notification = spent_notification.to_notification(
-        deps.api,
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-    )?;
+    let spent_notification =
+        spent_notification.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(Response::new()
         .set_data(to_binary(&ExecuteAnswer::TransferFrom { status: Success })?)
-        .add_attribute_plaintext(received_notification.id_plaintext(), received_notification.data_plaintext())
-        .add_attribute_plaintext(spent_notification.id_plaintext(), spent_notification.data_plaintext())
-    )
+        .add_attribute_plaintext(
+            received_notification.id_plaintext(),
+            received_notification.data_plaintext(),
+        )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        ))
 }
 
 fn try_batch_transfer_from(
@@ -1787,32 +1861,43 @@ fn try_batch_transfer_from(
         notifications.push((received_notification, spent_notification));
     }
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
 
-    let (received_notifications, spent_notifications): (Vec<ReceivedNotification>, Vec<SpentNotification>) = notifications
-        .into_iter()
-        .unzip();
+    let (received_notifications, spent_notifications): (
+        Vec<ReceivedNotification>,
+        Vec<SpentNotification>,
+    ) = notifications.into_iter().unzip();
     let received_data = multi_received_data(
-        deps.storage, 
-        deps.api, 
-        received_notifications, 
-        &tx_hash, 
-        env.block.random.clone().unwrap()
+        deps.storage,
+        deps.api,
+        received_notifications,
+        &tx_hash,
+        env.block.random.clone().unwrap(),
     )?;
     let spent_data = multi_spent_data(
-        deps.storage, 
-        deps.api, 
-        spent_notifications, 
-        &tx_hash, 
-        env.block.random.clone().unwrap()
+        deps.storage,
+        deps.api,
+        spent_notifications,
+        &tx_hash,
+        env.block.random.clone().unwrap(),
     )?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::BatchTransferFrom { status: Success,})?)
-            .add_attribute_plaintext(format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID), Binary::from(received_data).to_base64())
-            .add_attribute_plaintext(format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID), Binary::from(spent_data).to_base64())
-    )
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BatchTransferFrom {
+            status: Success,
+        })?)
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            Binary::from(received_data).to_base64(),
+        )
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID),
+            Binary::from(spent_data).to_base64(),
+        ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1890,26 +1975,31 @@ fn try_send_from(
         account_random_pos,
     )?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
     let received_notification = received_notification.to_notification(
         deps.api,
         deps.storage,
         env.block.height.clone(),
         &tx_hash,
     )?;
-    let spent_notification = spent_notification.to_notification(
-        deps.api,
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-    )?;
+    let spent_notification =
+        spent_notification.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(Response::new()
         .add_messages(messages)
         .set_data(to_binary(&ExecuteAnswer::SendFrom { status: Success })?)
-        .add_attribute_plaintext(received_notification.id_plaintext(), received_notification.data_plaintext())
-        .add_attribute_plaintext(spent_notification.id_plaintext(), spent_notification.data_plaintext())
-    )
+        .add_attribute_plaintext(
+            received_notification.id_plaintext(),
+            received_notification.data_plaintext(),
+        )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        ))
 }
 
 fn try_batch_send_from(
@@ -1943,24 +2033,29 @@ fn try_batch_send_from(
         notifications.push((received_notification, spent_notification));
     }
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
 
-    let (received_notifications, spent_notifications): (Vec<ReceivedNotification>, Vec<SpentNotification>) = notifications
-        .into_iter()
-        .unzip();
+    let (received_notifications, spent_notifications): (
+        Vec<ReceivedNotification>,
+        Vec<SpentNotification>,
+    ) = notifications.into_iter().unzip();
     let received_data = multi_received_data(
-        deps.storage, 
-        deps.api, 
-        received_notifications, 
-        &tx_hash, 
-        env.block.random.clone().unwrap()
+        deps.storage,
+        deps.api,
+        received_notifications,
+        &tx_hash,
+        env.block.random.clone().unwrap(),
     )?;
     let spent_data = multi_spent_data(
-        deps.storage, 
-        deps.api, 
-        spent_notifications, 
-        &tx_hash, 
-        env.block.random.clone().unwrap()
+        deps.storage,
+        deps.api,
+        spent_notifications,
+        &tx_hash,
+        env.block.random.clone().unwrap(),
     )?;
 
     Ok(Response::new()
@@ -1968,9 +2063,14 @@ fn try_batch_send_from(
         .set_data(to_binary(&ExecuteAnswer::BatchSendFrom {
             status: Success,
         })?)
-        .add_attribute_plaintext(format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID), Binary::from(received_data).to_base64())
-        .add_attribute_plaintext(format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID), Binary::from(spent_data).to_base64())
-    )
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            Binary::from(received_data).to_base64(),
+        )
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID),
+            Binary::from(spent_data).to_base64(),
+        ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2029,24 +2129,26 @@ fn try_burn_from(
         &account_random_pos,
     )?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
-    let spent_notification = SpentNotification{
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
+    let spent_notification = SpentNotification {
         notification_for: owner,
         amount: raw_amount,
         actions: 1,
         recipient: None,
         balance: new_balance,
-    }.to_notification(
-        deps.api,
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-    )?;
+    }
+    .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(Response::new()
         .set_data(to_binary(&ExecuteAnswer::BurnFrom { status: Success })?)
-        .add_attribute_plaintext(spent_notification.id_plaintext(), spent_notification.data_plaintext())
-    )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        ))
 }
 
 fn try_batch_burn_from(
@@ -2103,7 +2205,7 @@ fn try_batch_burn_from(
             &account_random_pos,
         )?;
 
-        spent_notifications.push(SpentNotification{
+        spent_notifications.push(SpentNotification {
             notification_for: spender.clone(),
             amount,
             actions: 1,
@@ -2114,20 +2216,27 @@ fn try_batch_burn_from(
 
     TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
     let spent_data = multi_spent_data(
-        deps.storage, 
-        deps.api, 
-        spent_notifications, 
-        &tx_hash, 
-        env.block.random.clone().unwrap()
+        deps.storage,
+        deps.api,
+        spent_notifications,
+        &tx_hash,
+        env.block.random.clone().unwrap(),
     )?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::BatchBurnFrom { status: Success })?)
-            .add_attribute_plaintext(format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID), Binary::from(spent_data).to_base64())
-    )
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BatchBurnFrom {
+            status: Success,
+        })?)
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID),
+            Binary::from(spent_data).to_base64(),
+        ))
 }
 
 fn try_increase_allowance(
@@ -2157,23 +2266,26 @@ fn try_increase_allowance(
     let new_amount = allowance.amount;
     AllowancesStore::save(deps.storage, &info.sender, &spender, &allowance)?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
     let notification = AllowanceNotification {
         notification_for: spender.clone(),
         amount: new_amount,
         allower: info.sender.clone(),
         expiration,
-    }.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
+    }
+    .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
-    Ok(
-        Response::new()
+    Ok(Response::new()
         .set_data(to_binary(&ExecuteAnswer::IncreaseAllowance {
             owner: info.sender,
             spender,
             allowance: Uint128::from(new_amount),
         })?)
-        .add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext())
-    )
+        .add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext()))
 }
 
 fn try_decrease_allowance(
@@ -2203,23 +2315,26 @@ fn try_decrease_allowance(
     let new_amount = allowance.amount;
     AllowancesStore::save(deps.storage, &info.sender, &spender, &allowance)?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
     let notification = AllowanceNotification {
         notification_for: spender.clone(),
         amount: new_amount,
         allower: info.sender.clone(),
         expiration,
-    }.to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
+    }
+    .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
-    Ok(
-        Response::new()
+    Ok(Response::new()
         .set_data(to_binary(&ExecuteAnswer::DecreaseAllowance {
             owner: info.sender,
             spender,
             allowance: Uint128::from(new_amount),
         })?)
-        .add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext())
-    )
+        .add_attribute_plaintext(notification.id_plaintext(), notification.data_plaintext()))
 }
 
 fn add_minters(
@@ -2350,24 +2465,26 @@ fn try_burn(
         &account_random_pos,
     )?;
 
-    let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
-    let spent_notification = SpentNotification{
+    let tx_hash = env
+        .transaction
+        .clone()
+        .ok_or(StdError::generic_err("no tx hash found"))?
+        .hash;
+    let spent_notification = SpentNotification {
         notification_for: info.sender,
         actions: 1,
         amount: raw_amount,
         recipient: None,
         balance: new_balance,
-    }.to_notification(
-        deps.api,
-        deps.storage,
-        env.block.height,
-        &tx_hash,
-    )?;
+    }
+    .to_notification(deps.api, deps.storage, env.block.height, &tx_hash)?;
 
     Ok(Response::new()
         .set_data(to_binary(&ExecuteAnswer::Burn { status: Success })?)
-        .add_attribute_plaintext(spent_notification.id_plaintext(), spent_notification.data_plaintext())
-    )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        ))
 }
 
 fn perform_transfer(
@@ -2378,7 +2495,8 @@ fn perform_transfer(
     decoys: &Option<Vec<Addr>>,
     account_random_pos: &Option<usize>,
 ) -> StdResult<(ReceivedNotification, SpentNotification)> {
-    let sender_balance = BalancesStore::update_balance(store, from, amount, false, "transfer", &None, &None)?;
+    let sender_balance =
+        BalancesStore::update_balance(store, from, amount, false, "transfer", &None, &None)?;
     BalancesStore::update_balance(
         store,
         to,
@@ -2393,7 +2511,7 @@ fn perform_transfer(
         ReceivedNotification {
             notification_for: to.clone(),
             amount,
-            sender: Some(from.clone()),            
+            sender: Some(from.clone()),
         },
         SpentNotification {
             notification_for: from.clone(),
@@ -2444,9 +2562,9 @@ fn is_valid_symbol(symbol: &str) -> bool {
 
 ///
 /// ListChannels query
-/// 
+///
 ///   Public query to list all notification channels.
-/// 
+///
 fn query_list_channels(deps: Deps) -> StdResult<Binary> {
     let channels: Vec<String> = CHANNELS
         .iter(deps.storage)?
@@ -2457,10 +2575,10 @@ fn query_list_channels(deps: Deps) -> StdResult<Binary> {
 
 ///
 /// ChannelInfo query
-/// 
-///   Authenticated query allows clients to obtain the seed, 
+///
+///   Authenticated query allows clients to obtain the seed,
 ///   and Notification ID of an event for a specific tx_hash, for a specific channel.
-/// 
+///
 fn query_channel_info(
     deps: Deps,
     env: Env,
@@ -2490,7 +2608,7 @@ fn query_channel_info(
                     cddl: Some(RECEIVED_CHANNEL_SCHEMA.to_string()),
                 };
                 channels_data.push(channel_info_data);
-            },
+            }
             SPENT_CHANNEL_ID => {
                 let channel_info_data = ChannelInfoData {
                     mode: "txhash".to_string(),
@@ -2503,7 +2621,7 @@ fn query_channel_info(
                     cddl: Some(SPENT_CHANNEL_SCHEMA.to_string()),
                 };
                 channels_data.push(channel_info_data);
-            },
+            }
             ALLOWANCE_CHANNEL_ID => {
                 let channel_info_data = ChannelInfoData {
                     mode: "txhash".to_string(),
@@ -2516,7 +2634,7 @@ fn query_channel_info(
                     cddl: Some(ALLOWANCE_CHANNEL_SCHEMA.to_string()),
                 };
                 channels_data.push(channel_info_data);
-            },
+            }
             MULTI_RECEIVED_CHANNEL_ID => {
                 let channel_info_data = ChannelInfoData {
                     mode: "bloom".to_string(),
@@ -2538,22 +2656,27 @@ fn query_channel_info(
                                 FlatDescriptor {
                                     r#type: "uint128".to_string(),
                                     label: "amount".to_string(),
-                                    description: Some("The transfer amount in base denomination".to_string()),
+                                    description: Some(
+                                        "The transfer amount in base denomination".to_string(),
+                                    ),
                                 },
                                 FlatDescriptor {
                                     r#type: "bytes8".to_string(),
                                     label: "spender".to_string(),
-                                    description: Some("The last 8 bytes of the sender's canonical address".to_string()),
-                                }
+                                    description: Some(
+                                        "The last 8 bytes of the sender's canonical address"
+                                            .to_string(),
+                                    ),
+                                },
                             ],
-                        }
+                        },
                     }),
                     counter: None,
                     next_id: None,
                     cddl: None,
                 };
                 channels_data.push(channel_info_data);
-            },
+            }
             MULTI_SPENT_CHANNEL_ID => {
                 let channel_info_data = ChannelInfoData {
                     mode: "bloom".to_string(),
@@ -2575,29 +2698,39 @@ fn query_channel_info(
                                 FlatDescriptor {
                                     r#type: "uint128".to_string(),
                                     label: "amount".to_string(),
-                                    description: Some("The transfer amount in base denomination".to_string()),
+                                    description: Some(
+                                        "The transfer amount in base denomination".to_string(),
+                                    ),
                                 },
                                 FlatDescriptor {
                                     r#type: "uint128".to_string(),
                                     label: "balance".to_string(),
-                                    description: Some("Spender's new balance after the transfer".to_string()),
+                                    description: Some(
+                                        "Spender's new balance after the transfer".to_string(),
+                                    ),
                                 },
                                 FlatDescriptor {
                                     r#type: "bytes8".to_string(),
                                     label: "recipient".to_string(),
-                                    description: Some("The last 8 bytes of the recipient's canonical address".to_string()),
-                                }
+                                    description: Some(
+                                        "The last 8 bytes of the recipient's canonical address"
+                                            .to_string(),
+                                    ),
+                                },
                             ],
-                        }
+                        },
                     }),
                     counter: None,
                     next_id: None,
                     cddl: None,
                 };
                 channels_data.push(channel_info_data);
-            },
+            }
             _ => {
-                return Err(StdError::generic_err(format!("`{}` channel is undefined", channel)));
+                return Err(StdError::generic_err(format!(
+                    "`{}` channel is undefined",
+                    channel
+                )));
             }
         }
     }
@@ -2605,7 +2738,7 @@ fn query_channel_info(
     //Ok(Binary(vec![]))
     //let schema = CHANNEL_SCHEMATA.get(deps.storage, &channel);
 
-    to_binary(&QueryAnswer::ChannelInfo { 
+    to_binary(&QueryAnswer::ChannelInfo {
         as_of_block: Uint64::from(env.block.height),
         channels: channels_data,
         seed: get_seed(deps.storage, &sender_raw)?,
