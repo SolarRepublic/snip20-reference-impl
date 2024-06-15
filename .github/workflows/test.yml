@@ -28,7 +28,7 @@ jobs:
         # Label used to access the service container
         secretdev:
           # Docker Hub image
-          options: --name secretdev
+          options: --name localsecret
           image: ghcr.io/scrtlabs/localsecret:v1.13.1
           volumes: 
             - "/home/runner/work/snip20-reference-impl/snip20-reference-impl/:/root/code"
