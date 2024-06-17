@@ -196,7 +196,7 @@ impl DelayedWriteBuffer {
         amount: u128,
         tracker: &mut GasTracker<'a>,
     ) -> StdResult<()> {
-        let mut group = tracker.group("add_recipient".to_string());
+        let mut group = tracker.group("add_recipient");
         group.log("start");
 
         // check if `recipient` is already a recipient in the delayed write buffer

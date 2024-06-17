@@ -2007,7 +2007,7 @@ fn perform_transfer(
     // TESTING
     tracker: &mut GasTracker,
 ) -> StdResult<()> {
-    let mut group = tracker.group("perform_transfer".to_string());
+    let mut group = tracker.group("perform_transfer");
 
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_transfer_action(store, from, sender, to, amount, denom, memo, block)?;
@@ -2032,7 +2032,7 @@ fn perform_transfer(
     // add the tx info for the recipient to the buffer
     dwb.add_recipient(store, rng, to, tx_id, amount, tracker)?;
 
-    let mut group2 = tracker.group("perform_transfer".to_string());
+    let mut group2 = tracker.group("perform_transfer");
     group2.log("add_recipient");
 
     DWB.save(store, &dwb)?;

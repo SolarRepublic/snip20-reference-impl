@@ -13,8 +13,8 @@ impl<'a> GasTracker<'a> {
         }
     }
 
-    pub fn group<'b>(&'b mut self, name: String) -> GasGroup<'a, 'b> {
-        GasGroup::new(self, name)
+    pub fn group<'b>(&'b mut self, name: &str) -> GasGroup<'a, 'b> {
+        GasGroup::new(self, name.to_string())
     }
 
     pub fn add_to_response(self, resp: Response) -> Response {
