@@ -187,23 +187,22 @@ impl DelayedWriteBuffer {
         matched_index
     }
 
-    pub fn add_recipient(
+    pub fn add_recipient<'a>(
         &mut self,
         store: &mut dyn Storage,
         rng: &mut ContractPrng,
         recipient: &CanonicalAddr,
         tx_id: u64,
         amount: u128,
-        tracker: &mut GasTracker,
+        tracker: &mut GasTracker<'a>,
     ) -> StdResult<()> {
-        tracker.new_group("add_recipient");
-
-        tracker.log("start")?;
+        let mut group = tracker.group("add_recipient");
+        group.log("start");
 
         // check if `recipient` is already a recipient in the delayed write buffer
         let recipient_index = self.recipient_match(recipient);
 
-        tracker.log("recipient_match done")?;
+        group.log("recipient_match");
 
         // the new entry will either derive from a prior entry for the recipient or the dummy entry
         let mut new_entry = self.entries[recipient_index].clone();
