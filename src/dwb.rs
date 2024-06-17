@@ -6,7 +6,7 @@ use serde_big_array::BigArray;
 use cosmwasm_std::{to_binary, Api, Binary, CanonicalAddr, StdError, StdResult, Storage};
 use secret_toolkit::storage::{AppendStore, Item};
 
-use crate::{msg::QueryAnswer, state::{safe_add, safe_add_u64, BalancesStore,}, transaction_history::{Tx, TRANSACTIONS}};
+use crate::{gas_tracker::GasTracker, msg::QueryAnswer, state::{safe_add, safe_add_u64, BalancesStore,}, transaction_history::{Tx, TRANSACTIONS}};
 
 pub const KEY_DWB: &[u8] = b"dwb";
 pub const KEY_TX_NODES_COUNT: &[u8] = b"dwb-node-cnt";
@@ -193,10 +193,17 @@ impl DelayedWriteBuffer {
         rng: &mut ContractPrng,
         recipient: &CanonicalAddr,
         tx_id: u64,
-        amount: u128
+        amount: u128,
+        tracker: &mut GasTracker,
     ) -> StdResult<()> {
+        tracker.new_group("add_recipient");
+
+        tracker.log("start")?;
+
         // check if `recipient` is already a recipient in the delayed write buffer
         let recipient_index = self.recipient_match(recipient);
+
+        tracker.log("recipient_match done")?;
 
         // the new entry will either derive from a prior entry for the recipient or the dummy entry
         let mut new_entry = self.entries[recipient_index].clone();

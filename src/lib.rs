@@ -6,3 +6,4 @@ pub mod state;
 mod transaction_history;
 mod dwb;
 mod strings;
+mod gas_tracker;
