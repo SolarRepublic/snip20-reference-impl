@@ -10,6 +10,7 @@ use secret_toolkit_crypto::{sha_256, ContractPrng};
 
 use crate::batch;
 use crate::dwb::{log_dwb, AccountTxsStore, DelayedWriteBuffer, ACCOUNT_TXS, ACCOUNT_TX_COUNT, DWB, TX_NODES};
+use crate::gas_tracker::GasTracker;
 use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, ExecuteAnswer,
     ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
@@ -68,6 +69,10 @@ pub fn instantiate(
     let raw_admin = deps.api.addr_canonicalize(admin.as_str())?;
     let seed = env.block.random.as_ref().unwrap();
     let mut rng = ContractPrng::new(seed.as_slice(), &prng_seed_hashed);
+
+    // TESTING
+    let mut tracker = GasTracker::new(deps.api, "init balances");
+
     for balance in initial_balances {
         let amount = balance.amount.u128();
         let balance_address = deps.api.addr_canonicalize(balance.address.as_str())?;
@@ -80,7 +85,8 @@ pub fn instantiate(
             amount,
             msg.symbol.clone(),
             Some("Initial Balance".to_string()),
-            &env.block
+            &env.block,
+            &mut tracker,
         )?;
 
         if let Some(new_total_supply) = total_supply.checked_add(amount) {
@@ -796,12 +802,13 @@ fn try_mint_impl(
     denom: String,
     memo: Option<String>,
     block: &cosmwasm_std::BlockInfo,
+    tracker: &mut GasTracker,
 ) -> StdResult<()> {
     let raw_amount = amount.u128();
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
     let raw_minter = deps.api.addr_canonicalize(minter.as_str())?;
 
-    perform_mint(deps.storage, rng, &raw_minter, &raw_recipient, raw_amount, denom, memo, block)?;
+    perform_mint(deps.storage, rng, &raw_minter, &raw_recipient, raw_amount, denom, memo, block, tracker)?;
 
     Ok(())
 }
@@ -837,6 +844,8 @@ fn try_mint(
     let minted_amount = safe_add(&mut total_supply, amount.u128());
     TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
 
+    let mut tracker = GasTracker::new(deps.api, "`mint` start");
+
     // Note that even when minted_amount is equal to 0 we still want to perform the operations for logic consistency
     try_mint_impl(
         &mut deps,
@@ -847,6 +856,7 @@ fn try_mint(
         constants.symbol,
         memo,
         &env.block,
+        &mut tracker,
     )?;
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Mint { status: Success })?))
@@ -876,6 +886,7 @@ fn try_batch_mint(
 
     let mut total_supply = TOTAL_SUPPLY.load(deps.storage)?;
 
+    let mut tracker = GasTracker::new(deps.api, "`batch_mint` start");
     // Quick loop to check that the total of amounts is valid
     for action in actions {
         let actual_amount = safe_add(&mut total_supply, action.amount.u128());
@@ -890,6 +901,7 @@ fn try_batch_mint(
             constants.symbol.clone(),
             action.memo,
             &env.block,
+            &mut tracker,
         )?;
     }
 
@@ -1063,7 +1075,9 @@ fn try_deposit(
 
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
 
-    perform_deposit(deps.storage, rng, &sender_address, raw_amount, "uscrt".to_string(), &env.block)?;
+    let mut tracker = GasTracker::new(deps.api, "`deposit` start");
+
+    perform_deposit(deps.storage, rng, &sender_address, raw_amount, "uscrt".to_string(), &env.block, &mut tracker)?;
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Deposit { status: Success })?))
 }
@@ -1161,14 +1175,12 @@ fn try_transfer_impl(
     denom: String,
     memo: Option<String>,
     block: &cosmwasm_std::BlockInfo,
-    logs: &mut Vec<(String, String)>,
+    tracker: &mut GasTracker,
 ) -> StdResult<()> {
     let raw_sender = deps.api.addr_canonicalize(sender.as_str())?;
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
 
-    // TESTING
-    let gas = deps.api.check_gas()?;
-    logs.push(("gas1".to_string(), format!("{gas}")));
+    tracker.log("")?;
 
     perform_transfer(
         deps.storage,
@@ -1181,8 +1193,7 @@ fn try_transfer_impl(
         memo,
         block,
         // TESTING
-        deps.api,
-        logs,
+        tracker,
     )?;
 
     Ok(())
@@ -1203,7 +1214,7 @@ fn try_transfer(
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
     // TESTING
-    let mut logs = vec![];
+    let mut tracker: GasTracker = GasTracker::new(deps.api, "`transfer` start");
 
     try_transfer_impl(
         &mut deps,
@@ -1214,15 +1225,13 @@ fn try_transfer(
         symbol,
         memo,
         &env.block,
-        &mut logs,
+        &mut tracker,
     )?;
 
     // TESTING
     let mut resp = Response::new()
         .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?);
-    for log in logs {
-        resp = resp.add_attribute_plaintext(log.0, log.1);
-    }
+    resp = tracker.add_to_response(resp);
 
     Ok(
         //Response::new()
@@ -1240,7 +1249,10 @@ fn try_batch_transfer(
 ) -> StdResult<Response> {
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
-    for action in actions {
+    // TESTING
+    let mut tracker: GasTracker = GasTracker::new(deps.api, "`batch_transfer` start");
+
+    for action in actions {        
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
         try_transfer_impl(
             &mut deps,
@@ -1252,7 +1264,7 @@ fn try_batch_transfer(
             action.memo,
             &env.block,
             // TESTING
-            &mut vec![],
+            &mut tracker,
         )?;
     }
 
@@ -1306,6 +1318,7 @@ fn try_send_impl(
     memo: Option<String>,
     msg: Option<Binary>,
     block: &cosmwasm_std::BlockInfo,
+    tracker: &mut GasTracker,
 ) -> StdResult<()> {
     try_transfer_impl(
         deps,
@@ -1317,7 +1330,7 @@ fn try_send_impl(
         memo.clone(),
         block,
         // TESTING
-        &mut vec![],
+        tracker,
     )?;
 
     try_add_receiver_api_callback(
@@ -1352,6 +1365,9 @@ fn try_send(
     let mut messages = vec![];
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
+    // TESTING
+    let mut tracker: GasTracker = GasTracker::new(deps.api, "`send` start");
+
     try_send_impl(
         &mut deps,
         rng,
@@ -1364,6 +1380,7 @@ fn try_send(
         memo,
         msg,
         &env.block,
+        &mut tracker,
     )?;
 
     Ok(Response::new()
@@ -1380,6 +1397,9 @@ fn try_batch_send(
 ) -> StdResult<Response> {
     let mut messages = vec![];
     let symbol = CONFIG.load(deps.storage)?.symbol;
+    // TESTING
+    let mut tracker: GasTracker = GasTracker::new(deps.api, "`batch_send` start");
+
     for action in actions {
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
         try_send_impl(
@@ -1394,6 +1414,7 @@ fn try_batch_send(
             action.memo,
             action.msg,
             &env.block,
+            &mut tracker,
         )?;
     }
 
@@ -1463,6 +1484,9 @@ fn try_transfer_from_impl(
 
     use_allowance(deps.storage, env, owner, spender, raw_amount)?;
 
+    // TESTING
+    let mut tracker: GasTracker = GasTracker::new(deps.api, "`transfer_from` start");
+
     perform_transfer(
         deps.storage,
         rng,
@@ -1474,8 +1498,7 @@ fn try_transfer_from_impl(
         memo,
         &env.block,
         // TESTING
-        deps.api,
-        &mut vec![],
+        &mut tracker,
     )?;
 
     Ok(())
@@ -1985,22 +2008,19 @@ fn perform_transfer(
     memo: Option<String>,
     block: &BlockInfo,
     // TESTING
-    api: &dyn Api,
-    logs: &mut Vec<(String, String)>,
+    tracker: &mut GasTracker,
 ) -> StdResult<()> {
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_transfer_action(store, from, sender, to, amount, denom, memo, block)?;
 
     // TESTING
-    let gas = api.check_gas()?;
-    logs.push(("gas2".to_string(), format!("{gas}")));
+    tracker.log("start of perform transfer")?;
 
     // load delayed write buffer
     let mut dwb = DWB.load(store)?;
 
     // TESTING
-    let gas = api.check_gas()?;
-    logs.push(("gas3".to_string(), format!("{gas}")));
+    tracker.log("write dwb")?;
 
     let transfer_str = "transfer";
     // settle the owner's account
@@ -2010,22 +2030,18 @@ fn perform_transfer(
         dwb.settle_sender_or_owner_account(store, rng, sender, tx_id, 0, transfer_str)?;
     }
 
-    // TESTING
-    let gas = api.check_gas()?;
-    logs.push(("gas4".to_string(), format!("{gas}")));
+    tracker.log("settle sender owner done")?;
 
     // add the tx info for the recipient to the buffer
-    dwb.add_recipient(store, rng, to, tx_id, amount)?;
+    dwb.add_recipient(store, rng, to, tx_id, amount, tracker)?;
 
     // TESTING
-    let gas = api.check_gas()?;
-    logs.push(("gas5".to_string(), format!("{gas}")));
+    tracker.log("add recipient done")?;
 
     DWB.save(store, &dwb)?;
 
     // TESTING
-    let gas = api.check_gas()?;
-    logs.push(("gas6".to_string(), format!("{gas}")));
+    tracker.log("saved dwb")?;
 
     Ok(())
 }
@@ -2039,6 +2055,7 @@ fn perform_mint(
     denom: String,
     memo: Option<String>,
     block: &BlockInfo,
+    tracker: &mut GasTracker,
 ) -> StdResult<()> {
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_mint_action(store, minter, to, amount, denom, memo, block)?;
@@ -2052,7 +2069,7 @@ fn perform_mint(
     }
 
     // add the tx info for the recipient to the buffer
-    dwb.add_recipient(store, rng, to, tx_id, amount)?;
+    dwb.add_recipient(store, rng, to, tx_id, amount, tracker)?;
 
     DWB.save(store, &dwb)?;
 
@@ -2066,6 +2083,7 @@ fn perform_deposit(
     amount: u128,
     denom: String,
     block: &BlockInfo,
+    tracker: &mut GasTracker,
 ) -> StdResult<()> {
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_deposit_action(store, amount, denom, block)?;
@@ -2074,7 +2092,7 @@ fn perform_deposit(
     let mut dwb = DWB.load(store)?;
 
     // add the tx info for the recipient to the buffer
-    dwb.add_recipient(store, rng, to, tx_id, amount)?;
+    dwb.add_recipient(store, rng, to, tx_id, amount, tracker)?;
 
     DWB.save(store, &dwb)?;
 
