@@ -71,7 +71,7 @@ pub fn instantiate(
     let mut rng = ContractPrng::new(seed.as_slice(), &prng_seed_hashed);
 
     // TESTING
-    let mut tracker = GasTracker::new(deps.api, "init balances");
+    let mut tracker = GasTracker::new(deps.api);
 
     for balance in initial_balances {
         let amount = balance.amount.u128();
@@ -844,7 +844,7 @@ fn try_mint(
     let minted_amount = safe_add(&mut total_supply, amount.u128());
     TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
 
-    let mut tracker = GasTracker::new(deps.api, "`mint` start");
+    let mut tracker = GasTracker::new(deps.api);
 
     // Note that even when minted_amount is equal to 0 we still want to perform the operations for logic consistency
     try_mint_impl(
@@ -886,7 +886,7 @@ fn try_batch_mint(
 
     let mut total_supply = TOTAL_SUPPLY.load(deps.storage)?;
 
-    let mut tracker = GasTracker::new(deps.api, "`batch_mint` start");
+    let mut tracker = GasTracker::new(deps.api);
     // Quick loop to check that the total of amounts is valid
     for action in actions {
         let actual_amount = safe_add(&mut total_supply, action.amount.u128());
@@ -1075,7 +1075,7 @@ fn try_deposit(
 
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
 
-    let mut tracker = GasTracker::new(deps.api, "`deposit` start");
+    let mut tracker = GasTracker::new(deps.api);
 
     perform_deposit(deps.storage, rng, &sender_address, raw_amount, "uscrt".to_string(), &env.block, &mut tracker)?;
 
@@ -1166,7 +1166,7 @@ fn try_redeem(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn try_transfer_impl(
+fn try_transfer_impl<'a>(
     deps: &mut DepsMut,
     rng: &mut ContractPrng,
     sender: &Addr,
@@ -1175,12 +1175,10 @@ fn try_transfer_impl(
     denom: String,
     memo: Option<String>,
     block: &cosmwasm_std::BlockInfo,
-    tracker: &mut GasTracker,
+    tracker: &mut GasTracker<'a>,
 ) -> StdResult<()> {
     let raw_sender = deps.api.addr_canonicalize(sender.as_str())?;
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
-
-    tracker.log("")?;
 
     perform_transfer(
         deps.storage,
@@ -1214,7 +1212,7 @@ fn try_transfer(
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
     // TESTING
-    let mut tracker: GasTracker = GasTracker::new(deps.api, "`transfer` start");
+    let mut tracker: GasTracker = GasTracker::new(deps.api);
 
     try_transfer_impl(
         &mut deps,
@@ -1231,11 +1229,10 @@ fn try_transfer(
     // TESTING
     let mut resp = Response::new()
         .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?);
+
     resp = tracker.add_to_response(resp);
 
     Ok(
-        //Response::new()
-        //    .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?)
         resp
     )
 }
@@ -1250,7 +1247,7 @@ fn try_batch_transfer(
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
     // TESTING
-    let mut tracker: GasTracker = GasTracker::new(deps.api, "`batch_transfer` start");
+    let mut tracker: GasTracker = GasTracker::new(deps.api);
 
     for action in actions {        
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
@@ -1366,7 +1363,7 @@ fn try_send(
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
     // TESTING
-    let mut tracker: GasTracker = GasTracker::new(deps.api, "`send` start");
+    let mut tracker: GasTracker = GasTracker::new(deps.api);
 
     try_send_impl(
         &mut deps,
@@ -1398,7 +1395,7 @@ fn try_batch_send(
     let mut messages = vec![];
     let symbol = CONFIG.load(deps.storage)?.symbol;
     // TESTING
-    let mut tracker: GasTracker = GasTracker::new(deps.api, "`batch_send` start");
+    let mut tracker: GasTracker = GasTracker::new(deps.api);
 
     for action in actions {
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
@@ -1485,7 +1482,7 @@ fn try_transfer_from_impl(
     use_allowance(deps.storage, env, owner, spender, raw_amount)?;
 
     // TESTING
-    let mut tracker: GasTracker = GasTracker::new(deps.api, "`transfer_from` start");
+    let mut tracker: GasTracker = GasTracker::new(deps.api);
 
     perform_transfer(
         deps.storage,
@@ -2010,17 +2007,17 @@ fn perform_transfer(
     // TESTING
     tracker: &mut GasTracker,
 ) -> StdResult<()> {
+    let mut group = tracker.group("perform_transfer".to_string());
+
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_transfer_action(store, from, sender, to, amount, denom, memo, block)?;
 
-    // TESTING
-    tracker.log("start of perform transfer")?;
+    group.log("store_transfer_action");
 
     // load delayed write buffer
     let mut dwb = DWB.load(store)?;
 
-    // TESTING
-    tracker.log("write dwb")?;
+    group.log("loaded dwb");
 
     let transfer_str = "transfer";
     // settle the owner's account
@@ -2030,18 +2027,18 @@ fn perform_transfer(
         dwb.settle_sender_or_owner_account(store, rng, sender, tx_id, 0, transfer_str)?;
     }
 
-    tracker.log("settle sender owner done")?;
+    group.log("settle_sender_or_owner_account");
 
     // add the tx info for the recipient to the buffer
     dwb.add_recipient(store, rng, to, tx_id, amount, tracker)?;
 
-    // TESTING
-    tracker.log("add recipient done")?;
+    let mut group2 = tracker.group("perform_transfer".to_string());
+    group2.log("add_recipient");
 
     DWB.save(store, &dwb)?;
 
     // TESTING
-    tracker.log("saved dwb")?;
+    group2.log("saved dwb");
 
     Ok(())
 }

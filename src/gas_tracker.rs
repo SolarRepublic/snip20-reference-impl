@@ -1,66 +1,65 @@
-use cosmwasm_std::{Api, Response, StdResult};
+use cosmwasm_std::{Api, Response};
 
 pub struct GasTracker<'a> {
+    logs: Vec<(String, String)>,
     api: &'a dyn Api,
-    pub groups: Vec<GasGroup>,
-}
-
-pub struct GasGroup {
-    pub name: String,
-    pub logs: Vec<GasLog>, 
-}
-
-pub struct GasLog {
-    pub value: u64,
-    pub comment: String,
 }
 
 impl<'a> GasTracker<'a> {
-    pub fn new(api: &'a dyn Api, group_name: &str) -> Self {
-        GasTracker {
+    pub fn new(api: &'a dyn Api) -> Self {
+        Self {
+            logs: Vec::new(),
             api,
-            groups: vec![
-                GasGroup {
-                    name: group_name.to_string(),
-                    logs: vec![],
-                }
-            ],
         }
     }
 
-    pub fn new_group(&mut self, group_name: &str) {
-        self.groups.push(
-            GasGroup {
-                name: group_name.to_string(),
-                logs: vec![],
-            }
-        );
-    }
-
-    pub fn log(&mut self, comment: &str) -> StdResult<()> {
-        let current_group_idx = self.groups.len() - 1;
-        //let logs_len = self.groups[current_group_idx].logs.len();
-        let gas = self.api.check_gas()?;
-        self.groups[current_group_idx].logs.push(
-            GasLog {
-                //key: format!("gas.{}.{}#{}", self.group_name, logs_len, comment),
-                value: gas,
-                comment: comment.to_string(),
-            }
-        );
-        Ok(())
+    pub fn group<'b>(&'b mut self, name: String) -> GasGroup<'a, 'b> {
+        GasGroup::new(self, name)
     }
 
     pub fn add_to_response(self, resp: Response) -> Response {
         let mut new_resp = resp.clone();
-        for group in self.groups {
-            for (idx, log) in group.logs.into_iter().enumerate() {
-                new_resp = new_resp.add_attribute_plaintext(
-                    format!("gas.{}.{}#{}", group.name, idx, log.comment),
-                    format!("{}", log.value),
-                );
-            }
+        for log in self.logs.into_iter() {
+            new_resp = new_resp.add_attribute_plaintext(
+                log.0,
+                log.1
+            );
         }
         new_resp
+    }
+}
+
+pub struct GasGroup<'a, 'b> {
+    tracker: &'b mut GasTracker<'a>,
+    name: String,
+    index: usize,
+}
+
+impl<'a, 'b> GasGroup<'a, 'b> {
+    fn new(tracker: &'b mut GasTracker<'a>, name: String) -> Self {
+        Self {
+            tracker,
+            name,
+            index: 0,
+        }
+    }
+    
+    pub fn mark(&mut self) {
+        self.log("");
+    }
+
+    pub fn log(&mut self, comment: &str) {
+        let gas = self.tracker.api.check_gas();
+        let log_entry = (
+            format!(
+                "group.{}.{}#{}",
+                self.name,
+                self.index,
+                comment
+            ),
+            gas.unwrap_or(0u64).to_string()
+        );
+        self.tracker.logs.push(log_entry);
+        self.index += 1;
     }
 }
