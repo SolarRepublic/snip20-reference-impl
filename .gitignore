@@ -19,3 +19,11 @@ contract.wasm.gz
 # IDEs
 *.iml
 .idea
+.vscode
+
+# Packages
+node_modules/
+
+# Private
+.env
+scrap/
