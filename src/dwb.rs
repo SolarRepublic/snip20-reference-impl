@@ -100,8 +100,50 @@ impl DelayedWriteBuffer {
         BalancesStore::save(store, &account, balance)
     }
 
-    /// settles a participant's account who may or may not have an entry in the buffer
-    /// gets balance including any amount in the buffer, and then subtracts amount spent in this tx
+
+    /// settles an entry at a given index in the buffer
+    fn settle_entry_with_tracker(
+        &mut self,
+        store: &mut dyn Storage,
+        index: usize,
+        tracker: &mut GasTracker,
+    ) -> StdResult<()> {
+        let mut group1 = tracker.group("settle_entry1");
+
+        let entry = self.entries[index];
+        let account = entry.recipient()?;
+
+        group1.log("entry.recipient()");
+
+        AccountTxsStore::append_bundle_with_tracker(
+            store,
+            &account,
+            entry.head_node()?,
+            entry.list_len()?,
+            tracker,
+        )?;
+
+        let mut group = tracker.group("settle_entry2");
+
+        group.log("append_bundle");
+
+        // get the address' stored balance
+        let mut balance = BalancesStore::load(store, &account);
+
+        group.log("balance.load");
+
+        safe_add(&mut balance, entry.amount()? as u128);
+
+        group.log("safe_add");
+
+        // add the amount from entry to the stored balance
+        let result = BalancesStore::save(store, &account, balance);
+
+        group.log("balance.save");
+
+        result
+    }
+
     pub fn settle_sender_or_owner_account(
         &mut self,
         store: &mut dyn Storage,
@@ -134,7 +176,61 @@ impl DelayedWriteBuffer {
                 "insufficient funds to {op_name}: balance={balance}, required={amount_spent}",
             )));
         };
+
         BalancesStore::save(store, address, new_balance)?;
+
+        Ok(())
+    }
+
+    /// settles a participant's account who may or may not have an entry in the buffer
+    /// gets balance including any amount in the buffer, and then subtracts amount spent in this tx
+    pub fn settle_sender_or_owner_account_tracked(
+        &mut self,
+        store: &mut dyn Storage,
+        rng: &mut ContractPrng,
+        address: &CanonicalAddr,
+        tx_id: u64,
+        amount_spent: u128,
+        op_name: &str,
+        tracker: &mut GasTracker,
+    ) -> StdResult<()> {
+        let mut group = tracker.group("settle_sender_or_owner");
+
+        // release the address from the buffer
+        let (balance, mut entry) = self.constant_time_release(
+            store, 
+            rng, 
+            address
+        )?;
+
+        group.log("ct_release");
+
+        let head_node = entry.add_tx_node(store, tx_id)?;
+
+        group.log("add_tx_node");
+
+        AccountTxsStore::append_bundle(
+            store,
+            address,
+            head_node,
+            entry.list_len()?,
+        )?;
+
+        group.log("append_bundle");
+    
+        let new_balance = if let Some(balance_after_sub) = balance.checked_sub(amount_spent) {
+            balance_after_sub
+        } else {
+            return Err(StdError::generic_err(format!(
+                "insufficient funds to {op_name}: balance={balance}, required={amount_spent}",
+            )));
+        };
+
+        group.log("new_balance");
+
+        BalancesStore::save(store, address, new_balance)?;
+
+        group.log("balance.save");
     
         Ok(())
     }
@@ -197,7 +293,6 @@ impl DelayedWriteBuffer {
         tracker: &mut GasTracker<'a>,
     ) -> StdResult<()> {
         let mut group = tracker.group("add_recipient");
-        group.log("start");
 
         // check if `recipient` is already a recipient in the delayed write buffer
         let recipient_index = self.recipient_match(recipient);
@@ -207,26 +302,44 @@ impl DelayedWriteBuffer {
         // the new entry will either derive from a prior entry for the recipient or the dummy entry
         let mut new_entry = self.entries[recipient_index].clone();
         new_entry.set_recipient(recipient)?;
+
+        group.log("set_recipient");
+
         new_entry.add_tx_node(store, tx_id)?;
+
+        group.log("add_tx_node");
+
         new_entry.add_amount(amount)?;
+
+        group.log("add_amount");
 
         // whether or not recipient is in the buffer (non-zero index)
         // casting to i32 will never overflow, so long as dwb length is limited to a u16 value
         let if_recipient_in_buffer = constant_time_is_not_zero(recipient_index as i32);
 
+        group.log("if_recipient_in_buffer");
+
         // randomly pick an entry to exclude in case the recipient is not in the buffer
         let random_exclude_index = random_in_range(rng, 1, DWB_LEN as u32)? as usize;
         //println!("random_exclude_index: {random_exclude_index}");
 
+        group.log("rand_in_range");
+
         // index of entry to exclude from selection
         let exclude_index = constant_time_if_else(if_recipient_in_buffer, recipient_index, random_exclude_index);
+
+        group.log("exclude_index");
 
         // randomly select any other entry to settle in constant-time (avoiding the reserved 0th position)
         let random_settle_index = (((random_in_range(rng, 0, DWB_LEN as u32 - 2)? + exclude_index as u32) % (DWB_LEN as u32 - 1)) + 1) as usize;
         //println!("random_settle_index: {random_settle_index}");
 
+        group.log("random_settle_index");
+
         // whether or not the buffer is fully saturated yet
         let if_undersaturated = constant_time_is_not_zero(self.empty_space_counter as i32);
+
+        group.log("if_undersaturated");
 
         // find the next empty entry in the buffer
         let next_empty_index = (DWB_LEN - self.empty_space_counter) as usize;
@@ -234,22 +347,36 @@ impl DelayedWriteBuffer {
         // if buffer is not yet saturated, settle the address at the next empty index
         let bounded_settle_index = constant_time_if_else(if_undersaturated, next_empty_index, random_settle_index);
 
+        group.log("bounded_settle_index");
+
         // check if we have any open slots in the linked list
         let if_list_can_grow = constant_time_is_not_zero((DWB_MAX_TX_EVENTS - self.entries[recipient_index].list_len()?) as i32);
+
+        group.log("if_list_can_grow");
 
         // if we would overflow the list, just settle recipient
         // TODO: see docs for attack analysis
         let actual_settle_index = constant_time_if_else(if_list_can_grow, bounded_settle_index, recipient_index);
 
+        group.log("actual_settle_index");
+
         // settle the entry
-        self.settle_entry(store, actual_settle_index)?;
+        self.settle_entry_with_tracker(store, actual_settle_index, tracker)?;
+
+        // group.log("settle_entry()");
+
+        let mut group2 = tracker.group("add_recipient2");
 
         // replace it with a randomly generated address (that is not currently in the buffer) and 0 amount and nil events pointer
         let replacement_entry = self.unique_random_entry(rng)?;
         self.entries[actual_settle_index] = replacement_entry;
 
+        group2.log("replacement_entry");
+
         // pick the index to where the recipient's entry should be written
         let write_index = constant_time_if_else(if_recipient_in_buffer, recipient_index, actual_settle_index);
+
+        group2.log("write_index");
 
         // either updates the existing recipient entry, or overwrites the random replacement entry in the settled index
         self.entries[write_index] = new_entry;
@@ -260,6 +387,8 @@ impl DelayedWriteBuffer {
             constant_time_if_else(if_recipient_in_buffer, 0, 1),
             0
         ) as u16;
+
+        group2.log("empty_space_counter");
 
         Ok(())
     }
@@ -511,6 +640,46 @@ impl AccountTxsStore {
         let account_tx_count_store = ACCOUNT_TX_COUNT.add_suffix(account.as_slice());
         let account_tx_count = account_tx_count_store.may_load(store)?.unwrap_or_default();
         account_tx_count_store.save(store, &(account_tx_count.saturating_add(u32::from(list_len))))?;
+
+        account_txs_store.push(store, &tx_bundle)
+    }
+
+    /// appends a new tx bundle for an account, called when non-transfer tx occurs or is settled.
+    pub fn append_bundle_with_tracker(store: &mut dyn Storage, account: &CanonicalAddr, head_node: u64, list_len: u16, tracker: &mut GasTracker) -> StdResult<()> {
+        let mut group = tracker.group("append_bundle");
+
+        let account_txs_store = ACCOUNT_TXS.add_suffix(account.as_slice());
+        let account_txs_len = account_txs_store.get_len(store)?;
+        group.log("account_txs_len");
+
+        let tx_bundle;
+        if account_txs_len > 0 {
+            // peek at the last tx bundle added
+            let last_tx_bundle = account_txs_store.get_at(store, account_txs_len - 1)?;
+            tx_bundle = TxBundle {
+                head_node,
+                list_len,
+                offset: last_tx_bundle.offset + u32::from(last_tx_bundle.list_len),
+            };
+        } else { // this is the first bundle for the account
+            tx_bundle = TxBundle {
+                head_node,
+                list_len,
+                offset: 0,
+            };
+        }
+
+        group.log(format!("if.account_txs_len={}", account_txs_len).as_str());
+
+        // update the total count of txs for account
+        let account_tx_count_store = ACCOUNT_TX_COUNT.add_suffix(account.as_slice());
+        let account_tx_count = account_tx_count_store.may_load(store)?.unwrap_or_default();
+        
+        group.log("account_tx_count");
+
+        account_tx_count_store.save(store, &(account_tx_count.saturating_add(u32::from(list_len))))?;
+
+        group.log("count.save");
 
         account_txs_store.push(store, &tx_bundle)
     }

@@ -1,14 +1,10 @@
-import type {JsonObject, JsonValue, NaiveHexLower, NaiveHexMixed} from '@blake.regalia/belt';
-import type {Snip24} from '@solar-republic/contractor';
+import type {JsonObject} from '@blake.regalia/belt';
 
-import {readFileSync} from 'node:fs';
 import {gunzip} from 'node:zlib';
 import {promisify} from 'node:util';
 
-import {base64_to_bytes, bytes, bytes_to_base64, bytes_to_hex, bytes_to_text, cast, entries, sha256, text_to_base64, transform_object} from '@blake.regalia/belt';
+import {base64_to_bytes, bytes_to_hex, bytes_to_text, cast, sha256} from '@blake.regalia/belt';
 import {
-	SecretApp,
-	SecretContract,
 	SecretWasm,
 	TxResultTuple,
 	Wallet,
@@ -16,20 +12,15 @@ import {
 	broadcast_result,
 	create_and_sign_tx_direct,
 	exec_fees,
-	random_32,
 } from '@solar-republic/neutrino';
 
 import {EncodedGoogleProtobufAny, encodeGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
-
 import {querySecretComputeCodeHashByCodeId, querySecretComputeCodes} from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/query';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query'
-
-import {queryCosmwasmWasmCode, queryCosmwasmWasmCodes} from '@solar-republic/cosmos-grpc/cosmwasm/wasm/v1/query';
-
 import {SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_STORE_CODE, SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_INSTANTIATE_CONTRACT, encodeSecretComputeMsgStoreCode, encodeSecretComputeMsgInstantiateContract} from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/msg';
-import {CwHexLower, CwUint128, WeakUintStr} from '@solar-republic/types';
+import {CwHexLower, WeakUintStr} from '@solar-republic/types';
 import { destructSecretRegistrationKey } from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
-import { safe_bytes_to_base64 } from '@solar-republic/cosmos-grpc';
+
 import { X_GAS_PRICE, P_LOCALSECRET_LCD } from './constants';
 
 

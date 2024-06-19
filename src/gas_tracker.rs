@@ -14,8 +14,22 @@ impl<'a> GasTracker<'a> {
     }
 
     pub fn group<'b>(&'b mut self, name: &str) -> GasGroup<'a, 'b> {
-        GasGroup::new(self, name.to_string())
+        let mut group = GasGroup::new(self, name.to_string());
+        group.mark();
+        group
     }
+
+    // pub fn from<'b>(&'b mut self, other: GasGroup<'b, 'b>) -> GasGroup<'a, 'b> {
+    //     let mut group = GasGroup::new(self, other.name);
+    //     group.index = other.index;
+    //     group
+    // }
+
+    // pub fn from<'b>(&'b mut self, name: &str, index: usize) -> GasGroup<'a, 'b> {
+    //     let mut group = GasGroup::new(self, name.to_string());
+    //     group.index = index;
+    //     group
+    // }
 
     pub fn add_to_response(self, resp: Response) -> Response {
         let mut new_resp = resp.clone();
@@ -29,10 +43,11 @@ impl<'a> GasTracker<'a> {
     }
 }
 
+
 pub struct GasGroup<'a, 'b> {
-    tracker: &'b mut GasTracker<'a>,
-    name: String,
-    index: usize,
+    pub tracker: &'b mut GasTracker<'a>,
+    pub name: String,
+    pub index: usize,
 }
 
 impl<'a, 'b> GasGroup<'a, 'b> {
@@ -51,13 +66,8 @@ impl<'a, 'b> GasGroup<'a, 'b> {
     pub fn log(&mut self, comment: &str) {
         let gas = self.tracker.api.check_gas();
         let log_entry = (
-            format!(
-                "group.{}.{}#{}",
-                self.name,
-                self.index,
-                comment
-            ),
-            gas.unwrap_or(0u64).to_string()
+            format!("gas.{}", self.name,),
+            format!("{}:{}:{}", self.index, gas.unwrap_or(0u64).to_string(), comment),
         );
         self.tracker.logs.push(log_entry);
         self.index += 1;

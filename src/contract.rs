@@ -1,7 +1,7 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Api, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128
+    entry_point, to_binary, Addr, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128
 };
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
 use secret_toolkit::utils::{pad_handle_result, pad_query_result};
@@ -1166,7 +1166,7 @@ fn try_redeem(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn try_transfer_impl<'a>(
+fn try_transfer_impl(
     deps: &mut DepsMut,
     rng: &mut ContractPrng,
     sender: &Addr,
@@ -1175,7 +1175,7 @@ fn try_transfer_impl<'a>(
     denom: String,
     memo: Option<String>,
     block: &cosmwasm_std::BlockInfo,
-    tracker: &mut GasTracker<'a>,
+    tracker: &mut GasTracker,
 ) -> StdResult<()> {
     let raw_sender = deps.api.addr_canonicalize(sender.as_str())?;
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
@@ -2007,38 +2007,37 @@ fn perform_transfer(
     // TESTING
     tracker: &mut GasTracker,
 ) -> StdResult<()> {
-    let mut group = tracker.group("perform_transfer");
+    let mut group1 = tracker.group("perform_transfer1");
 
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_transfer_action(store, from, sender, to, amount, denom, memo, block)?;
 
-    group.log("store_transfer_action");
+    group1.log("store_transfer_action");
 
     // load delayed write buffer
     let mut dwb = DWB.load(store)?;
 
-    group.log("loaded dwb");
+    group1.log("DWB.load");
 
     let transfer_str = "transfer";
     // settle the owner's account
-    dwb.settle_sender_or_owner_account(store, rng, from, tx_id, amount, transfer_str)?;
+    dwb.settle_sender_or_owner_account_tracked(store, rng, from, tx_id, amount, transfer_str, tracker)?;
+
     // if this is a *_from action, settle the sender's account, too
     if sender != from {
         dwb.settle_sender_or_owner_account(store, rng, sender, tx_id, 0, transfer_str)?;
     }
 
-    group.log("settle_sender_or_owner_account");
+    // group1.log("settle_sender_or_owner_account");
 
     // add the tx info for the recipient to the buffer
     dwb.add_recipient(store, rng, to, tx_id, amount, tracker)?;
 
-    let mut group2 = tracker.group("perform_transfer");
-    group2.log("add_recipient");
+    let mut group2 = tracker.group("perform_transfer2");
 
     DWB.save(store, &dwb)?;
 
-    // TESTING
-    group2.log("saved dwb");
+    group2.log("DWB.save");
 
     Ok(())
 }
