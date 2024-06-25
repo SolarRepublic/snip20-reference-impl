@@ -16,6 +16,55 @@ use serde::{Deserialize, Serialize};
 
 pub static CHANNELS: Keyset<String> = Keyset::new(b"channel-ids");
 
+#[derive(Serialize, Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
+pub struct Notification<T: NotificationData> {
+    // target for the notification
+    pub notification_for: Addr,
+    // data
+    pub data: T,
+}
+
+impl<T: NotificationData> Notification<T> {
+    pub fn new(notification_for: Addr, data: T) -> Self {
+        Notification {
+            notification_for,
+            data,
+        }
+    }
+
+    pub fn to_txhash_notification(
+        &self,
+        api: &dyn Api,
+        env: &Env,
+        secret: &[u8],
+    ) -> StdResult<TxHashNotification> {
+        let tx_hash = env.transaction.clone().ok_or(StdError::generic_err("no tx hash found"))?.hash;
+        let notification_for_raw = api.addr_canonicalize(self.notification_for.as_str())?;
+        let seed = get_seed(&notification_for_raw, secret)?;
+
+        // get notification id
+        let id = notification_id(&seed, self.data.channel_id(), &tx_hash)?;
+
+        // use CBOR to encode the data
+        let cbor_data = self.data.to_cbor(api)?;
+
+        // encrypt the receiver message
+        let encrypted_data =
+            encrypt_notification_data(&env.block.height, &tx_hash, &seed, self.data.channel_id(), cbor_data)?;
+
+        Ok(TxHashNotification {
+            id,
+            encrypted_data,
+        })
+    }
+}
+
+pub trait NotificationData {
+    fn to_cbor(&self, api: &dyn Api) -> StdResult<Vec<u8>>;
+    fn channel_id(&self) -> &str;
+}
+
 //  recvd = [
 //      amount: biguint,   ; transfer amount in base denomination
 //      sender: bstr,      ; byte sequence of sender's canonical address
@@ -29,32 +78,15 @@ pub const RECEIVED_CHANNEL_SCHEMA: &str = "recvd=[amount:biguint,sender:bstr]";
 
 #[derive(Serialize, Debug, Deserialize, Clone)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-pub struct ReceivedNotification {
-    // target recipient for the notification
-    pub notification_for: Addr,
-    // data
+pub struct ReceivedNotificationData {
     pub amount: u128,
     pub sender: Option<Addr>,
 }
 
-impl ReceivedNotification {
-    pub fn to_notification(
-        self,
-        api: &dyn Api,
-        block_height: u64,
-        tx_hash: &String,
-        secret: &[u8],
-    ) -> StdResult<TxHashNotification> {
-        let notification_for_raw = api.addr_canonicalize(self.notification_for.as_str())?;
-        let channel = RECEIVED_CHANNEL_ID.to_string();
-        let seed = get_seed(&notification_for_raw, secret)?;
-
-        // get notification id for receiver
-        let received_id = notification_id(&seed, &channel, &tx_hash)?;
-
-        // use CBOR to encode data
+impl NotificationData for ReceivedNotificationData {
+    fn to_cbor(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
         let received_data;
-        if let Some(sender) = self.sender {
+        if let Some(sender) = &self.sender {
             let sender_raw = api.addr_canonicalize(sender.as_str())?;
             received_data = cbor::to_vec(&(self.amount.to_be_bytes(), sender_raw.as_slice()))
                 .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
@@ -62,15 +94,11 @@ impl ReceivedNotification {
             received_data = cbor::to_vec(&(self.amount.to_be_bytes(), ZERO_ADDR))
                 .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
         }
+        Ok(received_data)
+    }
 
-        // encrypt the receiver message
-        let received_encrypted_data =
-            encrypt_notification_data(block_height, &tx_hash, &seed, &channel, received_data)?;
-
-        Ok(TxHashNotification {
-            id: received_id,
-            encrypted_data: received_encrypted_data,
-        })
+    fn channel_id(&self) -> &str {
+        RECEIVED_CHANNEL_ID
     }
 }
 
@@ -89,34 +117,17 @@ pub const SPENT_CHANNEL_SCHEMA: &str =
 
 #[derive(Serialize, Debug, Deserialize, Clone)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-pub struct SpentNotification {
-    // target recipient for the notification
-    pub notification_for: Addr,
-    // data
+pub struct SpentNotificationData {
     pub amount: u128,
     pub actions: u32,
     pub recipient: Option<Addr>,
     pub balance: u128,
 }
 
-impl SpentNotification {
-    pub fn to_notification(
-        self,
-        api: &dyn Api,
-        block_height: u64,
-        tx_hash: &String,
-        secret: &[u8],
-    ) -> StdResult<TxHashNotification> {
-        let notification_for_raw = api.addr_canonicalize(self.notification_for.as_str())?;
-        let channel = SPENT_CHANNEL_ID.to_string();
-        let seed = get_seed(&notification_for_raw, secret)?;
-
-        // get notification id for spent
-        let spent_id = notification_id(&seed, &channel, &tx_hash)?;
-
-        // use CBOR to encode data
+impl NotificationData for SpentNotificationData {
+    fn to_cbor(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
         let spent_data;
-        if let Some(recipient) = self.recipient {
+        if let Some(recipient) = &self.recipient {
             let recipient_raw = api.addr_canonicalize(recipient.as_str())?;
             spent_data = cbor::to_vec(&(
                 self.amount.to_be_bytes(),
@@ -134,15 +145,11 @@ impl SpentNotification {
             ))
             .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
         }
+        Ok(spent_data)
+    }
 
-        // encrypt the receiver message
-        let spent_encrypted_data =
-            encrypt_notification_data(block_height, &tx_hash, &seed, &channel, spent_data)?;
-
-        Ok(TxHashNotification {
-            id: spent_id,
-            encrypted_data: spent_encrypted_data,
-        })
+    fn channel_id(&self) -> &str {
+        SPENT_CHANNEL_ID
     }
 }
 
@@ -160,30 +167,15 @@ pub const ALLOWANCE_CHANNEL_SCHEMA: &str =
 
 #[derive(Serialize, Debug, Deserialize, Clone)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-pub struct AllowanceNotification {
-    // target recipient for the notification
-    pub notification_for: Addr,
-    // data
+pub struct AllowanceNotificationData {
     pub amount: u128,
     pub allower: Addr,
     pub expiration: Option<u64>,
 }
 
-impl AllowanceNotification {
-    pub fn to_notification(
-        self,
-        api: &dyn Api,
-        block_height: u64,
-        tx_hash: &String,
-        secret: &[u8],
-    ) -> StdResult<TxHashNotification> {
-        let notification_for_raw = api.addr_canonicalize(self.notification_for.as_str())?;
+impl NotificationData for AllowanceNotificationData {
+    fn to_cbor(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
         let allower_raw = api.addr_canonicalize(self.allower.as_str())?;
-        let channel = ALLOWANCE_CHANNEL_ID.to_string();
-        let seed = get_seed(&notification_for_raw, secret)?;
-
-        // get notification id for receiver of allowance
-        let updated_allowance_id = notification_id(&seed, &channel, &tx_hash)?;
 
         // use CBOR to encode data
         let updated_allowance_data = cbor::to_vec(&(
@@ -192,20 +184,11 @@ impl AllowanceNotification {
             self.expiration.unwrap_or(0u64), // expiration == 0 means no expiration
         ))
         .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
+        Ok(updated_allowance_data)
+    }
 
-        // encrypt the updated allowance message
-        let updated_allowance_encrypted_data = encrypt_notification_data(
-            block_height,
-            &tx_hash,
-            &seed,
-            &channel,
-            updated_allowance_data,
-        )?;
-
-        Ok(TxHashNotification {
-            id: updated_allowance_id,
-            encrypted_data: updated_allowance_encrypted_data,
-        })
+    fn channel_id(&self) -> &str {
+        ALLOWANCE_CHANNEL_ID
     }
 }
 
@@ -240,7 +223,7 @@ pub const MULTI_SPENT_CHANNEL_PACKET_SIZE: u32 = 40;
 
 pub fn multi_received_data(
     api: &dyn Api,
-    notifications: Vec<ReceivedNotification>,
+    notifications: Vec<Notification<ReceivedNotificationData>>,
     tx_hash: &String,
     env_random: Binary,
     secret: &[u8],
@@ -285,11 +268,11 @@ pub fn multi_received_data(
         // make the received packet
         let mut received_packet_plaintext: Vec<u8> = vec![];
         // amount bytes (u128 == 16 bytes)
-        received_packet_plaintext.extend_from_slice(&notification.amount.to_be_bytes());
+        received_packet_plaintext.extend_from_slice(&notification.data.amount.to_be_bytes());
         // sender account last 8 bytes
         let sender_bytes: &[u8];
         let sender_raw;
-        if let Some(sender) = &notification.sender {
+        if let Some(sender) = &notification.data.sender {
             sender_raw = api.addr_canonicalize(sender.as_str())?;
             sender_bytes = &sender_raw.as_slice()[sender_raw.0.len() - 8..];
         } else {
@@ -369,7 +352,7 @@ pub fn multi_received_data(
 
 pub fn multi_spent_data(
     api: &dyn Api,
-    notifications: Vec<SpentNotification>,
+    notifications: Vec<Notification<SpentNotificationData>>,
     tx_hash: &String,
     env_random: Binary,
     secret: &[u8],
@@ -409,13 +392,13 @@ pub fn multi_spent_data(
         // make the spent packet
         let mut spent_packet_plaintext: Vec<u8> = vec![];
         // amount bytes (u128 == 16 bytes)
-        spent_packet_plaintext.extend_from_slice(&notification.amount.to_be_bytes());
+        spent_packet_plaintext.extend_from_slice(&notification.data.amount.to_be_bytes());
         // balance bytes (u128 == 16 bytes)
-        spent_packet_plaintext.extend_from_slice(&notification.balance.to_be_bytes());
+        spent_packet_plaintext.extend_from_slice(&notification.data.balance.to_be_bytes());
         // recipient account last 8 bytes
         let recipient_bytes: &[u8];
         let recipient_raw;
-        if let Some(recipient) = &notification.recipient {
+        if let Some(recipient) = &notification.data.recipient {
             recipient_raw = api.addr_canonicalize(recipient.as_str())?;
             recipient_bytes = &recipient_raw.as_slice()[recipient_raw.0.len() - 8..];
         } else {
@@ -516,7 +499,7 @@ pub fn multi_spent_data(
 ///
 ///   Returns a notification id for the given address and channel id.
 ///
-pub fn notification_id(seed: &Binary, channel: &String, tx_hash: &String) -> StdResult<Binary> {
+pub fn notification_id(seed: &Binary, channel: &str, tx_hash: &String) -> StdResult<Binary> {
     // compute notification ID for this event
     let material = [channel.as_bytes(), ":".as_bytes(), tx_hash.as_bytes()].concat();
 
@@ -533,17 +516,15 @@ pub fn notification_id(seed: &Binary, channel: &String, tx_hash: &String) -> Std
 ///   Returns encrypted bytes given plaintext bytes, address, and channel id.
 ///
 pub fn encrypt_notification_data(
-    block_height: u64,
+    block_height: &u64,
     tx_hash: &String,
     seed: &Binary,
     //recipient: &CanonicalAddr,
-    channel: &String,
+    channel: &str,
     plaintext: Vec<u8>,
 ) -> StdResult<Binary> {
     let mut padded_plaintext = plaintext.clone();
     zero_pad(&mut padded_plaintext, NOTIFICATION_BLOCK_SIZE);
-
-    //let seed = get_seed(storage, recipient)?;
 
     let channel_id_bytes = sha_256(channel.as_bytes())[..12].to_vec();
     let salt_bytes = tx_hash.as_bytes()[..12].to_vec();
@@ -608,25 +589,25 @@ pub fn decoy_txhash_notification(
     let id = notification_id(&seed, &channel, &tx_hash)?;
     let data = vec![];
     let encrypted_data =
-        encrypt_notification_data(env.block.height, &tx_hash, &seed, &channel, data)?;
+        encrypt_notification_data(&env.block.height, &tx_hash, &seed, &channel, data)?;
     Ok(TxHashNotification { id, encrypted_data })
 }
 
 pub fn update_batch_spent_notifications_to_final_balance(
-    notifications: Vec<SpentNotification>,
-) -> Vec<SpentNotification> {
+    notifications: Vec<Notification<SpentNotificationData>>,
+) -> Vec<Notification<SpentNotificationData>> {
     let mut final_balances: HashMap<Addr, u128> = HashMap::new();
     notifications.iter().for_each(|notification| {
-        final_balances.insert(notification.notification_for.clone(), notification.balance);
+        final_balances.insert(notification.notification_for.clone(), notification.data.balance);
     });
     // update with final balance for all notifications
-    let notifications: Vec<SpentNotification> = notifications
+    let notifications: Vec<Notification<SpentNotificationData>> = notifications
         .into_iter()
         .map(|notification| {
             let mut new_notification = notification.clone();
             if let Some(final_balance) = final_balances.get(&notification.notification_for) {
-                if notification.balance != *final_balance {
-                    new_notification.balance = *final_balance;
+                if notification.data.balance != *final_balance {
+                    new_notification.data.balance = *final_balance;
                 }
             }
             new_notification
