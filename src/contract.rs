@@ -92,6 +92,7 @@ pub fn instantiate(
         32,
     )?;
     INTERNAL_SECRET.save(deps.storage, &internal_secret)?;
+    let internal_secret = internal_secret.as_slice();
 
     for balance in initial_balances {
         let amount = balance.amount.u128();
@@ -104,7 +105,8 @@ pub fn instantiate(
             amount,
             msg.symbol.clone(),
             Some("Initial Balance".to_string()),
-            &env.block
+            &env.block,
+            internal_secret,
         )?;
 
         if let Some(new_total_supply) = total_supply.checked_add(amount) {
@@ -159,6 +161,10 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
 
     let contract_status = CONTRACT_STATUS.load(deps.storage)?;
 
+    // load the internal secret, used by btbe and snip-52 notifications
+    let internal_secret = INTERNAL_SECRET.load(deps.storage)?;
+    let internal_secret = internal_secret.as_slice();
+
     match contract_status {
         ContractStatusLevel::StopAll | ContractStatusLevel::StopAllButRedeems => {
             let response = match msg {
@@ -170,7 +176,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
                     denom,
                     ..
                 } if contract_status == ContractStatusLevel::StopAllButRedeems => {
-                    try_redeem(deps, env, info, amount, denom)
+                    try_redeem(deps, env, info, amount, denom, internal_secret)
                 }
                 _ => Err(StdError::generic_err(
                     "This contract is stopped and this action is not allowed",
@@ -184,13 +190,13 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
     let response = match msg.clone() {
         // Native
         ExecuteMsg::Deposit { .. } => {
-            try_deposit(deps, env, info, &mut rng)
+            try_deposit(deps, env, info, &mut rng, internal_secret)
         }
         ExecuteMsg::Redeem {
             amount,
             denom,
             ..
-        } => try_redeem(deps, env, info, amount, denom),
+        } => try_redeem(deps, env, info, amount, denom, internal_secret),
 
         // Base
         ExecuteMsg::Transfer {
@@ -206,6 +212,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             recipient,
             amount,
             memo,
+            internal_secret,
         ),
         ExecuteMsg::Send {
             recipient,
@@ -224,18 +231,19 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             amount,
             memo,
             msg,
+            internal_secret,
         ),
         ExecuteMsg::BatchTransfer { actions, .. } => {
-            try_batch_transfer(deps, env, info, &mut rng, actions)
+            try_batch_transfer(deps, env, info, &mut rng, actions, internal_secret,)
         }
         ExecuteMsg::BatchSend { actions, .. } => {
-            try_batch_send(deps, env, info, &mut rng, actions)
+            try_batch_send(deps, env, info, &mut rng, actions, internal_secret,)
         }
         ExecuteMsg::Burn {
             amount,
             memo,
             ..
-        } => try_burn(deps, env, info, amount, memo),
+        } => try_burn(deps, env, info, amount, memo, internal_secret,),
         ExecuteMsg::RegisterReceive { code_hash, .. } => {
             try_register_receive(deps, info, code_hash)
         }
@@ -270,6 +278,7 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             recipient,
             amount,
             memo,
+            internal_secret,
         ),
         ExecuteMsg::SendFrom {
             owner,
@@ -290,12 +299,13 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             amount,
             memo,
             msg,
+            internal_secret,
         ),
         ExecuteMsg::BatchTransferFrom { actions, .. } => {
-            try_batch_transfer_from(deps, &env, info, &mut rng, actions)
+            try_batch_transfer_from(deps, &env, info, &mut rng, actions, internal_secret,)
         }
         ExecuteMsg::BatchSendFrom { actions, .. } => {
-            try_batch_send_from(deps, env, &info, &mut rng, actions)
+            try_batch_send_from(deps, env, &info, &mut rng, actions, internal_secret, )
         }
         ExecuteMsg::BurnFrom {
             owner,
@@ -309,9 +319,10 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             owner,
             amount,
             memo,
+            internal_secret,
         ),
         ExecuteMsg::BatchBurnFrom { actions, .. } => {
-            try_batch_burn_from(deps, &env, info, actions)
+            try_batch_burn_from(deps, &env, info, actions, internal_secret,)
         }
 
         // Mint
@@ -328,9 +339,10 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             recipient,
             amount,
             memo,
+            internal_secret,
         ),
         ExecuteMsg::BatchMint { actions, .. } => {
-            try_batch_mint(deps, env, info, &mut rng, actions)
+            try_batch_mint(deps, env, info, &mut rng, actions, internal_secret)
         }
 
         // Other
@@ -616,8 +628,10 @@ pub fn query_transactions(
         }
     }
 
-    //let account_slice = account_raw.as_slice();
-    let account_stored_entry = stored_entry(deps.storage, &account_raw)?;
+    let internal_secret = INTERNAL_SECRET.load(deps.storage)?;
+    let internal_secret = internal_secret.as_slice();
+
+    let account_stored_entry = stored_entry(deps.storage, &account_raw, internal_secret)?;
     let settled_tx_count = stored_tx_count(deps.storage, &account_stored_entry)?;
     let total = txs_in_dwb_count as u32 + settled_tx_count as u32;
     if end > total {
@@ -671,7 +685,8 @@ pub fn query_transactions(
         if let Some((bundle_idx, tx_bundle, start_at)) = find_start_bundle(
             deps.storage, 
             &account_raw, 
-            settled_start
+            settled_start,
+            internal_secret,
         )? {
             let mut txs_left = end - start;
 
@@ -726,7 +741,10 @@ pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
     let account = Addr::unchecked(account);
     let account = deps.api.addr_canonicalize(account.as_str())?;
 
-    let mut amount = stored_balance(deps.storage, &account)?;
+    let internal_secret = INTERNAL_SECRET.load(deps.storage)?;
+    let internal_secret = internal_secret.as_slice();
+
+    let mut amount = stored_balance(deps.storage, &account, internal_secret)?;
     let dwb = DWB.load(deps.storage)?;
     let dwb_index = dwb.recipient_match(&account);
     if dwb_index > 0 {
@@ -822,12 +840,13 @@ fn try_mint_impl(
     denom: String,
     memo: Option<String>,
     block: &cosmwasm_std::BlockInfo,
+    internal_secret: &[u8],
 ) -> StdResult<()> {
     let raw_amount = amount.u128();
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
     let raw_minter = deps.api.addr_canonicalize(minter.as_str())?;
 
-    perform_mint(deps.storage, rng, &raw_minter, &raw_recipient, raw_amount, denom, memo, block)?;
+    perform_mint(deps.storage, rng, &raw_minter, &raw_recipient, raw_amount, denom, memo, block, internal_secret)?;
 
     Ok(())
 }
@@ -841,6 +860,7 @@ fn try_mint(
     recipient: String,
     amount: Uint128,
     memo: Option<String>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let recipient = deps.api.addr_validate(recipient.as_str())?;
 
@@ -873,6 +893,7 @@ fn try_mint(
         constants.symbol,
         memo,
         &env.block,
+        internal_secret,
     )?;
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Mint { status: Success })?))
@@ -884,6 +905,7 @@ fn try_batch_mint(
     info: MessageInfo,
     rng: &mut ContractPrng,
     actions: Vec<batch::MintAction>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let constants = CONFIG.load(deps.storage)?;
 
@@ -916,6 +938,7 @@ fn try_batch_mint(
             constants.symbol.clone(),
             action.memo,
             &env.block,
+            internal_secret,
         )?;
     }
 
@@ -1055,6 +1078,7 @@ fn try_deposit(
     env: Env,
     info: MessageInfo,
     rng: &mut ContractPrng,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let constants = CONFIG.load(deps.storage)?;
 
@@ -1089,7 +1113,7 @@ fn try_deposit(
 
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
 
-    perform_deposit(deps.storage, rng, &sender_address, raw_amount, "uscrt".to_string(), &env.block)?;
+    perform_deposit(deps.storage, rng, &sender_address, raw_amount, "uscrt".to_string(), &env.block, internal_secret,)?;
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Deposit { status: Success })?))
 }
@@ -1100,6 +1124,7 @@ fn try_redeem(
     info: MessageInfo,
     amount: Uint128,
     denom: Option<String>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let constants = CONFIG.load(deps.storage)?;
     if !constants.redeem_is_enabled {
@@ -1139,7 +1164,7 @@ fn try_redeem(
     let mut dwb = DWB.load(deps.storage)?;
 
     // settle the signer's account in buffer
-    dwb.settle_sender_or_owner_account(deps.storage, &sender_address, tx_id, amount_raw, "redeem")?;
+    dwb.settle_sender_or_owner_account(deps.storage, &sender_address, tx_id, amount_raw, "redeem", internal_secret)?;
 
     DWB.save(deps.storage, &dwb)?;
 
@@ -1186,6 +1211,8 @@ fn try_transfer_impl(
     denom: String,
     memo: Option<String>,
     block: &cosmwasm_std::BlockInfo,
+    internal_secret: &[u8],
+    // TESTING
     logs: &mut Vec<(String, String)>,
 ) -> StdResult<()> {
     let raw_sender = deps.api.addr_canonicalize(sender.as_str())?;
@@ -1205,6 +1232,7 @@ fn try_transfer_impl(
         denom,
         memo,
         block,
+        internal_secret,
         // TESTING
         deps.api,
         logs,
@@ -1222,6 +1250,7 @@ fn try_transfer(
     recipient: String,
     amount: Uint128,
     memo: Option<String>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let recipient: Addr = deps.api.addr_validate(recipient.as_str())?;
 
@@ -1239,6 +1268,8 @@ fn try_transfer(
         symbol,
         memo,
         &env.block,
+        internal_secret,
+        // TESTING
         &mut logs,
     )?;
 
@@ -1262,6 +1293,7 @@ fn try_batch_transfer(
     info: MessageInfo,
     rng: &mut ContractPrng,
     actions: Vec<batch::TransferAction>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
@@ -1276,6 +1308,7 @@ fn try_batch_transfer(
             symbol.clone(),
             action.memo,
             &env.block,
+            internal_secret,
             // TESTING
             &mut vec![],
         )?;
@@ -1331,6 +1364,7 @@ fn try_send_impl(
     memo: Option<String>,
     msg: Option<Binary>,
     block: &cosmwasm_std::BlockInfo,
+    internal_secret: &[u8],
 ) -> StdResult<()> {
     try_transfer_impl(
         deps,
@@ -1341,6 +1375,7 @@ fn try_send_impl(
         denom,
         memo.clone(),
         block,
+        internal_secret,
         // TESTING
         &mut vec![],
     )?;
@@ -1371,6 +1406,7 @@ fn try_send(
     amount: Uint128,
     memo: Option<String>,
     msg: Option<Binary>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let recipient = deps.api.addr_validate(recipient.as_str())?;
 
@@ -1389,6 +1425,7 @@ fn try_send(
         memo,
         msg,
         &env.block,
+        internal_secret,
     )?;
 
     Ok(Response::new()
@@ -1402,6 +1439,7 @@ fn try_batch_send(
     info: MessageInfo,
     rng: &mut ContractPrng,
     actions: Vec<batch::SendAction>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let mut messages = vec![];
     let symbol = CONFIG.load(deps.storage)?.symbol;
@@ -1419,6 +1457,7 @@ fn try_batch_send(
             action.memo,
             action.msg,
             &env.block,
+            internal_secret,
         )?;
     }
 
@@ -1480,6 +1519,7 @@ fn try_transfer_from_impl(
     amount: Uint128,
     denom: String,
     memo: Option<String>,
+    internal_secret: &[u8],
 ) -> StdResult<()> {
     let raw_amount = amount.u128();
     let raw_spender = deps.api.addr_canonicalize(spender.as_str())?;
@@ -1498,6 +1538,7 @@ fn try_transfer_from_impl(
         denom,
         memo,
         &env.block,
+        internal_secret,
         // TESTING
         deps.api,
         &mut vec![],
@@ -1516,6 +1557,7 @@ fn try_transfer_from(
     recipient: String,
     amount: Uint128,
     memo: Option<String>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let owner = deps.api.addr_validate(owner.as_str())?;
     let recipient = deps.api.addr_validate(recipient.as_str())?;
@@ -1530,6 +1572,7 @@ fn try_transfer_from(
         amount,
         symbol,
         memo,
+        internal_secret,
     )?;
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::TransferFrom { status: Success })?))
@@ -1541,6 +1584,7 @@ fn try_batch_transfer_from(
     info: MessageInfo,
     rng: &mut ContractPrng,
     actions: Vec<batch::TransferFromAction>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let symbol = CONFIG.load(deps.storage)?.symbol;
     for action in actions {
@@ -1556,6 +1600,7 @@ fn try_batch_transfer_from(
             action.amount,
             symbol.clone(),
             action.memo,
+            internal_secret,
         )?;
     }
 
@@ -1579,6 +1624,7 @@ fn try_send_from_impl(
     amount: Uint128,
     memo: Option<String>,
     msg: Option<Binary>,
+    internal_secret: &[u8],
 ) -> StdResult<()> {
     let spender = info.sender.clone();
     let symbol = CONFIG.load(deps.storage)?.symbol;
@@ -1592,6 +1638,7 @@ fn try_send_from_impl(
         amount,
         symbol,
         memo.clone(),
+        internal_secret,
     )?;
 
     try_add_receiver_api_callback(
@@ -1621,6 +1668,7 @@ fn try_send_from(
     amount: Uint128,
     memo: Option<String>,
     msg: Option<Binary>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let owner = deps.api.addr_validate(owner.as_str())?;
     let recipient = deps.api.addr_validate(recipient.as_str())?;
@@ -1637,6 +1685,7 @@ fn try_send_from(
         amount,
         memo,
         msg,
+        internal_secret,
     )?;
 
     Ok(Response::new()
@@ -1650,6 +1699,7 @@ fn try_batch_send_from(
     info: &MessageInfo,
     rng: &mut ContractPrng,
     actions: Vec<batch::SendFromAction>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let mut messages = vec![];
 
@@ -1668,6 +1718,7 @@ fn try_batch_send_from(
             action.amount,
             action.memo,
             action.msg,
+            internal_secret,
         )?;
     }
 
@@ -1686,6 +1737,7 @@ fn try_burn_from(
     owner: String,
     amount: Uint128,
     memo: Option<String>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let owner = deps.api.addr_validate(owner.as_str())?;
     let raw_owner = deps.api.addr_canonicalize(owner.as_str())?;
@@ -1714,9 +1766,9 @@ fn try_burn_from(
     let mut dwb = DWB.load(deps.storage)?;
 
     // settle the owner's account in buffer
-    dwb.settle_sender_or_owner_account(deps.storage, &raw_owner, tx_id, raw_amount, "burn")?;
+    dwb.settle_sender_or_owner_account(deps.storage, &raw_owner, tx_id, raw_amount, "burn", internal_secret)?;
     if raw_burner != raw_owner { // also settle sender's account
-        dwb.settle_sender_or_owner_account(deps.storage, &raw_burner, tx_id, 0, "burn")?;
+        dwb.settle_sender_or_owner_account(deps.storage, &raw_burner, tx_id, 0, "burn", internal_secret)?;
     }
 
     DWB.save(deps.storage, &dwb)?;
@@ -1741,6 +1793,7 @@ fn try_batch_burn_from(
     env: &Env,
     info: MessageInfo,
     actions: Vec<batch::BurnFromAction>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let constants = CONFIG.load(deps.storage)?;
     if !constants.burn_is_enabled {
@@ -1772,9 +1825,9 @@ fn try_batch_burn_from(
         let mut dwb = DWB.load(deps.storage)?;
     
         // settle the owner's account in buffer
-        dwb.settle_sender_or_owner_account(deps.storage, &raw_owner, tx_id, amount, "burn")?;
+        dwb.settle_sender_or_owner_account(deps.storage, &raw_owner, tx_id, amount, "burn", internal_secret)?;
         if raw_spender != raw_owner {
-            dwb.settle_sender_or_owner_account(deps.storage, &raw_spender, tx_id, 0, "burn")?;
+            dwb.settle_sender_or_owner_account(deps.storage, &raw_spender, tx_id, 0, "burn", internal_secret)?;
         }
     
         DWB.save(deps.storage, &dwb)?;
@@ -1954,6 +2007,7 @@ fn try_burn(
     info: MessageInfo,
     amount: Uint128,
     memo: Option<String>,
+    internal_secret: &[u8],
 ) -> StdResult<Response> {
     let constants = CONFIG.load(deps.storage)?;
     if !constants.burn_is_enabled {
@@ -1979,7 +2033,7 @@ fn try_burn(
     let mut dwb = DWB.load(deps.storage)?;
 
     // settle the signer's account in buffer
-    dwb.settle_sender_or_owner_account(deps.storage, &raw_burn_address, tx_id, raw_amount, "burn")?;
+    dwb.settle_sender_or_owner_account(deps.storage, &raw_burn_address, tx_id, raw_amount, "burn", internal_secret)?;
 
     DWB.save(deps.storage, &dwb)?;
 
@@ -2006,6 +2060,7 @@ fn perform_transfer(
     denom: String,
     memo: Option<String>,
     block: &BlockInfo,
+    internal_secret: &[u8],
     // TESTING
     api: &dyn Api,
     logs: &mut Vec<(String, String)>,
@@ -2026,10 +2081,10 @@ fn perform_transfer(
 
     let transfer_str = "transfer";
     // settle the owner's account
-    dwb.settle_sender_or_owner_account(store, from, tx_id, amount, transfer_str)?;
+    dwb.settle_sender_or_owner_account(store, from, tx_id, amount, transfer_str, internal_secret)?;
     // if this is a *_from action, settle the sender's account, too
     if sender != from {
-        dwb.settle_sender_or_owner_account(store, sender, tx_id, 0, transfer_str)?;
+        dwb.settle_sender_or_owner_account(store, sender, tx_id, 0, transfer_str, internal_secret)?;
     }
 
     // TESTING
@@ -2037,7 +2092,7 @@ fn perform_transfer(
     logs.push(("gas4".to_string(), format!("{gas}")));
 
     // add the tx info for the recipient to the buffer
-    dwb.add_recipient(store, rng, to, tx_id, amount)?;
+    dwb.add_recipient(store, rng, to, tx_id, amount, internal_secret)?;
 
     // TESTING
     let gas = api.check_gas()?;
@@ -2061,6 +2116,7 @@ fn perform_mint(
     denom: String,
     memo: Option<String>,
     block: &BlockInfo,
+    internal_secret: &[u8],
 ) -> StdResult<()> {
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_mint_action(store, minter, to, amount, denom, memo, block)?;
@@ -2070,11 +2126,11 @@ fn perform_mint(
 
     // if minter is not recipient, settle them
     if minter != to {
-        dwb.settle_sender_or_owner_account(store, minter, tx_id, 0, "mint")?;
+        dwb.settle_sender_or_owner_account(store, minter, tx_id, 0, "mint", internal_secret)?;
     }
 
     // add the tx info for the recipient to the buffer
-    dwb.add_recipient(store, rng, to, tx_id, amount)?;
+    dwb.add_recipient(store, rng, to, tx_id, amount, internal_secret)?;
 
     DWB.save(store, &dwb)?;
 
@@ -2088,6 +2144,7 @@ fn perform_deposit(
     amount: u128,
     denom: String,
     block: &BlockInfo,
+    internal_secret: &[u8],
 ) -> StdResult<()> {
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_deposit_action(store, amount, denom, block)?;
@@ -2096,7 +2153,7 @@ fn perform_deposit(
     let mut dwb = DWB.load(store)?;
 
     // add the tx info for the recipient to the buffer
-    dwb.add_recipient(store, rng, to, tx_id, amount)?;
+    dwb.add_recipient(store, rng, to, tx_id, amount, internal_secret)?;
 
     DWB.save(store, &dwb)?;
 
@@ -2459,9 +2516,12 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("alice").as_str())
             .unwrap();
 
-        assert_eq!(5000 - 1000, stored_balance(&deps.storage, &bob_addr).unwrap());
+        let internal_secret = INTERNAL_SECRET.load(&deps.storage).unwrap();
+        let internal_secret = internal_secret.as_slice();
+
+        assert_eq!(5000 - 1000, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
         // alice has not been settled yet
-        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         println!("DWB: {dwb:?}");
@@ -2501,11 +2561,11 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("charlie").as_str())
             .unwrap();
 
-        assert_eq!(5000 - 1000 - 100, stored_balance(&deps.storage, &bob_addr).unwrap());
+        assert_eq!(5000 - 1000 - 100, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
         // alice has not been settled yet
-        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
         // charlie has not been settled yet
-        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr).unwrap());
+        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr, internal_secret).unwrap());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2535,9 +2595,9 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(5000 - 1000 - 100 - 500, stored_balance(&deps.storage, &bob_addr).unwrap());
+        assert_eq!(5000 - 1000 - 100 - 500, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
         // make sure alice has not been settled yet
-        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2613,13 +2673,13 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("ernie").as_str())
             .unwrap();
 
-        assert_eq!(5000 - 1000 - 100 - 500 - 200, stored_balance(&deps.storage, &bob_addr).unwrap());
+        assert_eq!(5000 - 1000 - 100 - 500 - 200, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
         // alice has not been settled yet
-        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
         // charlie has not been settled yet
-        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr).unwrap());
+        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr, internal_secret).unwrap());
         // ernie has not been settled yet
-        assert_ne!(200, stored_balance(&deps.storage, &ernie_addr).unwrap());
+        assert_ne!(200, stored_balance(&deps.storage, &ernie_addr, internal_secret).unwrap());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2656,9 +2716,9 @@ mod tests {
             .unwrap();
 
         // alice has been settled
-        assert_eq!(1500 - 50, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_eq!(1500 - 50, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
         // dora has not been settled
-        assert_ne!(50, stored_balance(&deps.storage, &dora_addr).unwrap());
+        assert_ne!(50, stored_balance(&deps.storage, &dora_addr, internal_secret).unwrap());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2692,7 +2752,7 @@ mod tests {
             let result = handle_result.unwrap();
             assert!(ensure_success(result));
         }
-        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59, stored_balance(&deps.storage, &bob_addr).unwrap());
+        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2716,7 +2776,7 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59 - 1, stored_balance(&deps.storage, &bob_addr).unwrap());
+        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59 - 1, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
 
         //let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2737,7 +2797,7 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59 - 1 - 1, stored_balance(&deps.storage, &bob_addr).unwrap());
+        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59 - 1 - 1, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
 
         //let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2761,7 +2821,7 @@ mod tests {
             assert!(ensure_success(result));
 
             // alice should not settle
-            assert_eq!(1500 - 50, stored_balance(&deps.storage, &alice_addr).unwrap());
+            assert_eq!(1500 - 50, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
         }
 
         // alice sends 1 to dora to settle
@@ -2780,7 +2840,7 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(2724, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_eq!(2724, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
 
         // now we send 50 more transactions to alice from bob
         for i in 1..=50 {
@@ -2801,7 +2861,7 @@ mod tests {
             assert!(ensure_success(result));
 
             // alice should not settle
-            assert_eq!(2724, stored_balance(&deps.storage, &alice_addr).unwrap());
+            assert_eq!(2724, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
         }
 
         let handle_msg = ExecuteMsg::SetViewingKey {
@@ -3626,8 +3686,11 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("alice".to_string()).as_str())
             .unwrap();
 
-        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap();
-        let alice_balance = stored_balance(&deps.storage, &alice_canonical).unwrap();
+        let internal_secret = INTERNAL_SECRET.load(&deps.storage).unwrap();
+        let internal_secret = internal_secret.as_slice();
+
+        let bob_balance = stored_balance(&deps.storage, &bob_canonical, internal_secret).unwrap();
+        let alice_balance = stored_balance(&deps.storage, &alice_canonical, internal_secret).unwrap();
         assert_eq!(bob_balance, 5000 - 2000);
         assert_ne!(alice_balance, 2000);
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -3769,8 +3832,11 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("contract".to_string()).as_str())
             .unwrap();
 
-        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap();
-        let contract_balance = stored_balance(&deps.storage, &contract_canonical).unwrap();
+        let internal_secret = INTERNAL_SECRET.load(&deps.storage).unwrap();
+        let internal_secret = internal_secret.as_slice();
+
+        let bob_balance = stored_balance(&deps.storage, &bob_canonical, internal_secret).unwrap();
+        let contract_balance = stored_balance(&deps.storage, &contract_canonical, internal_secret).unwrap();
         assert_eq!(bob_balance, 5000 - 2000);
         assert_ne!(contract_balance, 2000);
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -3901,7 +3967,10 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("bob".to_string()).as_str())
             .unwrap();
 
-        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap();
+        let internal_secret = INTERNAL_SECRET.load(&deps.storage).unwrap();
+        let internal_secret = internal_secret.as_slice();
+
+        let bob_balance = stored_balance(&deps.storage, &bob_canonical, internal_secret).unwrap();
         assert_eq!(bob_balance, 10000 - 2000);
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
         assert_eq!(total_supply, 10000 - 2000);
@@ -4045,12 +4114,16 @@ mod tests {
             "handle() failed: {}",
             handle_result.err().unwrap()
         );
+        
+        let internal_secret = INTERNAL_SECRET.load(&deps.storage).unwrap();
+        let internal_secret = internal_secret.as_slice();
+
         for (name, amount) in &[("bob", 200_u128), ("jerry", 300), ("mike", 400)] {
             let name_canon = deps
                 .api
                 .addr_canonicalize(Addr::unchecked(name.to_string()).as_str())
                 .unwrap();
-            let balance = stored_balance(&deps.storage, &name_canon).unwrap();
+            let balance = stored_balance(&deps.storage, &name_canon, internal_secret).unwrap();
             assert_eq!(balance, 10000 - amount);
         }
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -4084,7 +4157,7 @@ mod tests {
                 .api
                 .addr_canonicalize(Addr::unchecked(name.to_string()).as_str())
                 .unwrap();
-            let balance = stored_balance(&deps.storage, &name_canon).unwrap();
+            let balance = stored_balance(&deps.storage, &name_canon, internal_secret).unwrap();
             assert_eq!(balance, 10000 - allowance_size);
         }
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -4434,7 +4507,7 @@ mod tests {
             .api
             .addr_canonicalize(Addr::unchecked("butler".to_string()).as_str())
             .unwrap();
-        assert_eq!(stored_balance(&deps.storage, &canonical).unwrap(), 3000)
+        assert_eq!(stored_balance(&deps.storage, &canonical, INTERNAL_SECRET.load(&deps.storage).unwrap().as_slice()).unwrap(), 3000)
     }
 
     #[test]
@@ -4507,7 +4580,7 @@ mod tests {
             .unwrap();
 
         // stored balance not updated, still in dwb
-        assert_ne!(stored_balance(&deps.storage, &canonical).unwrap(), 6000);
+        assert_ne!(stored_balance(&deps.storage, &canonical, INTERNAL_SECRET.load(&deps.storage).unwrap().as_slice()).unwrap(), 6000);
 
         let create_vk_msg = ExecuteMsg::CreateViewingKey {
             entropy: "34".to_string(),

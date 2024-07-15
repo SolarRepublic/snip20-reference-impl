@@ -343,11 +343,7 @@ fn entry_belongs_in_left_node(secret: &[u8], entry: StoredEntry, bit_pos: u8) ->
 }
 
 /// Locates a btbe node given an address; returns tuple of (node, bit position)
-pub fn locate_btbe_node(storage: &dyn Storage, address: &CanonicalAddr) -> StdResult<(BitwiseTrieNode, u64, u8)> {
-    // load internal contract secret
-    let secret = INTERNAL_SECRET.load(storage)?;
-    let secret = secret.as_slice();
-
+pub fn locate_btbe_node(storage: &dyn Storage, address: &CanonicalAddr, secret: &[u8]) -> StdResult<(BitwiseTrieNode, u64, u8)> {
     // create key bytes
     let hash = hkdf_sha_256(&Some(BUCKETING_SALT_BYTES.to_vec()), secret, address.as_slice(), 256)?;
     
@@ -377,8 +373,8 @@ pub fn locate_btbe_node(storage: &dyn Storage, address: &CanonicalAddr) -> StdRe
 /// Does a binary search on the append store to find the bundle where the `start_idx` tx can be found.
 /// For a paginated search `start_idx` = `page` * `page_size`.
 /// Returns the bundle index, the bundle, and the index in the bundle list to start at
-pub fn find_start_bundle(storage: &dyn Storage, account: &CanonicalAddr, start_idx: u32) -> StdResult<Option<(u32, TxBundle, u32)>> {
-    let (node, _, _) = locate_btbe_node(storage, account)?;
+pub fn find_start_bundle(storage: &dyn Storage, account: &CanonicalAddr, start_idx: u32, internal_secret: &[u8]) -> StdResult<Option<(u32, TxBundle, u32)>> {
+    let (node, _, _) = locate_btbe_node(storage, account, internal_secret)?;
     let bucket = node.bucket(storage)?;
     if let Some((_, entry)) = bucket.constant_time_find_address(account) {
         let mut left = 0u32;
@@ -404,15 +400,15 @@ pub fn find_start_bundle(storage: &dyn Storage, account: &CanonicalAddr, start_i
 }
 
 /// gets the StoredEntry for a given account
-pub fn stored_entry(storage: &dyn Storage, account: &CanonicalAddr) -> StdResult<Option<StoredEntry>> {
-    let (node, _, _) = locate_btbe_node(storage, account)?;
+pub fn stored_entry(storage: &dyn Storage, account: &CanonicalAddr, internal_secret: &[u8]) -> StdResult<Option<StoredEntry>> {
+    let (node, _, _) = locate_btbe_node(storage, account, internal_secret)?;
     let bucket = node.bucket(storage)?;
     Ok(bucket.constant_time_find_address(account).map(|b| b.1))
 }
 
 /// returns the current stored balance for an entry
-pub fn stored_balance(storage: &dyn Storage, address: &CanonicalAddr) -> StdResult<u128> {
-    if let Some(entry) = stored_entry(storage, address)? {
+pub fn stored_balance(storage: &dyn Storage, address: &CanonicalAddr, internal_secret: &[u8]) -> StdResult<u128> {
+    if let Some(entry) = stored_entry(storage, address, internal_secret)? {
         Ok(entry.balance()? as u128)
     } else {
         Ok(0_u128)
@@ -435,9 +431,9 @@ pub fn stored_tx_count(storage: &dyn Storage, entry: &Option<StoredEntry>) -> St
 
 // merges a dwb entry into the current node's bucket
 // `spent_amount` is any required subtraction due to being sender of tx
-pub fn merge_dwb_entry(storage: &mut dyn Storage, dwb_entry: DelayedWriteBufferEntry, amount_spent: Option<u128>) -> StdResult<()> {
+pub fn merge_dwb_entry(storage: &mut dyn Storage, dwb_entry: DelayedWriteBufferEntry, amount_spent: Option<u128>, internal_secret: &[u8]) -> StdResult<()> {
     // locate the node that the given entry belongs in
-    let (mut node, node_id, mut bit_pos) = locate_btbe_node(storage, &dwb_entry.recipient()?)?;
+    let (mut node, node_id, mut bit_pos) = locate_btbe_node(storage, &dwb_entry.recipient()?, internal_secret)?;
 
     // load that node's current bucket
     let mut bucket = node.bucket(storage)?;

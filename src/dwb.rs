@@ -14,8 +14,6 @@ use crate::transaction_history::{Tx, TRANSACTIONS};
 pub const KEY_DWB: &[u8] = b"dwb";
 pub const KEY_TX_NODES_COUNT: &[u8] = b"dwb-node-cnt";
 pub const KEY_TX_NODES: &[u8] = b"dwb-tx-nodes";
-pub const KEY_ACCOUNT_TXS: &[u8] = b"dwb-acc-txs";
-pub const KEY_ACCOUNT_TX_COUNT: &[u8] = b"dwb-acc-tx-cnt";
 
 pub static DWB: Item<DelayedWriteBuffer> = Item::new(KEY_DWB);
 // use with add_suffix tx id (u64)
@@ -80,32 +78,6 @@ impl DelayedWriteBuffer {
         })
     }
 
-    /// settles an entry at a given index in the buffer
-    #[inline]
-    fn settle_entry(
-        &self,
-        store: &mut dyn Storage,
-        index: usize,
-    ) -> StdResult<()> {
-        merge_dwb_entry(store, self.entries[index], None)
-/*
-        let account = entry.recipient()?;
-
-        AccountTxsStore::append_bundle(
-            store,
-            &account,
-            entry.head_node()?,
-            entry.list_len()?,
-        )?;
-
-        // get the address' stored balance
-        let mut balance = BalancesStore::load(store, &account);
-        safe_add(&mut balance, entry.amount()? as u128);
-        // add the amount from entry to the stored balance
-        BalancesStore::save(store, &account, balance)
-*/
-    }
-
     /// settles a participant's account who may or may not have an entry in the buffer
     /// gets balance including any amount in the buffer, and then subtracts amount spent in this tx
     pub fn settle_sender_or_owner_account(
@@ -115,11 +87,13 @@ impl DelayedWriteBuffer {
         tx_id: u64,
         amount_spent: u128,
         op_name: &str,
+        internal_secret: &[u8],
     ) -> StdResult<()> {
         // release the address from the buffer
         let (balance, mut dwb_entry) = self.constant_time_release(
             store, 
-            address
+            address,
+            internal_secret,
         )?;
 
         if balance.checked_sub(amount_spent).is_none() {
@@ -130,7 +104,7 @@ impl DelayedWriteBuffer {
 
         dwb_entry.add_tx_node(store, tx_id)?;
 
-        merge_dwb_entry(store, dwb_entry, Some(amount_spent))
+        merge_dwb_entry(store, dwb_entry, Some(amount_spent), internal_secret)
 /* 
         let head_node = entry.add_tx_node(store, tx_id)?;
 
@@ -152,10 +126,11 @@ impl DelayedWriteBuffer {
     fn constant_time_release(
         &mut self, 
         store: &mut dyn Storage, 
-        address: &CanonicalAddr
+        address: &CanonicalAddr,
+        internal_secret: &[u8],
     ) -> StdResult<(u128, DelayedWriteBufferEntry)> {
         // get the address' stored balance
-        let mut balance = stored_balance(store, address)?;
+        let mut balance = stored_balance(store, address, internal_secret)?;
 
         // locate the position of the entry in the buffer
         let matched_entry_idx = self.recipient_match(address);
@@ -203,7 +178,8 @@ impl DelayedWriteBuffer {
         rng: &mut ContractPrng,
         recipient: &CanonicalAddr,
         tx_id: u64,
-        amount: u128
+        amount: u128,
+        internal_secret: &[u8],
     ) -> StdResult<()> {
         // check if `recipient` is already a recipient in the delayed write buffer
         let recipient_index = self.recipient_match(recipient);
@@ -248,7 +224,7 @@ impl DelayedWriteBuffer {
                 actual_settle_index));
 
         // settle the entry
-        self.settle_entry(store, actual_settle_index)?;
+        merge_dwb_entry(store, self.entries[actual_settle_index], None, internal_secret)?;
 
         // write the new entry, which either overwrites the existing one for the same recipient,
         // replaces a randomly settled one, or inserts into an "empty" slot in the buffer
@@ -465,7 +441,9 @@ impl TxNode {
     }
 }
 
-
+/// A tx bundle is 1 or more tx nodes added to an account's history.
+/// The bundle points to a linked list of transaction nodes, which each reference
+/// a transaction record by its global id.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TxBundle {
     /// TX_NODES idx - pointer to the head tx node in the linked list
@@ -475,16 +453,6 @@ pub struct TxBundle {
     /// offset of the first tx of this bundle in the history of txs for the account (for pagination)
     pub offset: u32,
 }
-
-/// A tx bundle is 1 or more tx nodes added to an account's history.
-/// The bundle points to a linked list of transaction nodes, which each reference
-/// a transaction record by its global id.
-/// used with add_suffix(canonical addr of account)
-//pub static ACCOUNT_TXS: AppendStore<TxBundle> = AppendStore::new(KEY_ACCOUNT_TXS);
-
-/// Keeps track of the total count of txs for an account (not tx bundles)
-/// used with add_suffix(canonical addr of account)
-//pub static ACCOUNT_TX_COUNT: Item<u32> = Item::new(KEY_ACCOUNT_TX_COUNT);
 
 #[inline]
 fn constant_time_is_not_zero(value: i32) -> u32 {
