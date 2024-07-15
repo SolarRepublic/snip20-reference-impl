@@ -4,11 +4,10 @@ use cosmwasm_std::{
     entry_point, to_binary, Addr, Api, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg,
     Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128,
 };
-use secret_toolkit::notification::hkdf_sha_256;
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
 use secret_toolkit::utils::{pad_handle_result, pad_query_result};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
-use secret_toolkit_crypto::{sha_256, ContractPrng};
+use secret_toolkit_crypto::{sha_256, hkdf_sha_256, ContractPrng};
 
 use crate::batch;
 use crate::btbe::{
