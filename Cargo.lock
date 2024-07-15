@@ -718,13 +718,25 @@ name = "secret-toolkit"
 version = "0.10.0"
 source = "git+https://github.com/SolarRepublic/secret-toolkit.git#1bf8c5f3f08e75276fa812cb248c6eda5cd3beae"
 dependencies = [
- "secret-toolkit-crypto",
+ "secret-toolkit-crypto 0.10.0 (git+https://github.com/SolarRepublic/secret-toolkit.git)",
  "secret-toolkit-notification",
  "secret-toolkit-permit",
  "secret-toolkit-serialization",
  "secret-toolkit-storage",
  "secret-toolkit-utils",
  "secret-toolkit-viewing-key",
+]
+
+[[package]]
+name = "secret-toolkit-crypto"
+version = "0.10.0"
+source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=f4d83e7dcabf55832150a0f311b58dfbc949e82b#f4d83e7dcabf55832150a0f311b58dfbc949e82b"
+dependencies = [
+ "hkdf",
+ "rand_chacha",
+ "rand_core 0.6.4",
+ "secret-cosmwasm-std",
+ "sha2 0.10.8",
 ]
 
 [[package]]
@@ -752,7 +764,7 @@ dependencies = [
  "ripemd",
  "schemars",
  "secret-cosmwasm-std",
- "secret-toolkit-crypto",
+ "secret-toolkit-crypto 0.10.0 (git+https://github.com/SolarRepublic/secret-toolkit.git)",
  "serde",
  "sha2 0.10.8",
 ]
@@ -767,7 +779,7 @@ dependencies = [
  "ripemd",
  "schemars",
  "secret-cosmwasm-std",
- "secret-toolkit-crypto",
+ "secret-toolkit-crypto 0.10.0 (git+https://github.com/SolarRepublic/secret-toolkit.git)",
  "serde",
 ]
 
@@ -813,7 +825,7 @@ dependencies = [
  "schemars",
  "secret-cosmwasm-std",
  "secret-cosmwasm-storage",
- "secret-toolkit-crypto",
+ "secret-toolkit-crypto 0.10.0 (git+https://github.com/SolarRepublic/secret-toolkit.git)",
  "secret-toolkit-utils",
  "serde",
  "subtle",
@@ -926,7 +938,7 @@ dependencies = [
  "secret-cosmwasm-std",
  "secret-cosmwasm-storage",
  "secret-toolkit",
- "secret-toolkit-crypto",
+ "secret-toolkit-crypto 0.10.0 (git+https://github.com/SolarRepublic/secret-toolkit.git?rev=f4d83e7dcabf55832150a0f311b58dfbc949e82b)",
  "serde",
  "serde-big-array",
  "static_assertions",

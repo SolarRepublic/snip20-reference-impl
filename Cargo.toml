@@ -38,7 +38,7 @@ rand = { version = "0.8.5", default-features = false }
 # secret-toolkit = { version = "0.10.0", default-features = false, features = ["permit", "storage", "viewing-key"] }
 secret-toolkit = { git = "https://github.com/SolarRepublic/secret-toolkit.git", default-features = false, features = ["permit", "storage", "viewing-key", "notification"] }
 # secret-toolkit-crypto = { version = "0.10.0", default-features = false, features = ["hash"] }
-secret-toolkit-crypto = { git = "https://github.com/SolarRepublic/secret-toolkit.git", default-features = false, features = ["hash"] }
+secret-toolkit-crypto = { git = "https://github.com/SolarRepublic/secret-toolkit.git", rev = "f4d83e7dcabf55832150a0f311b58dfbc949e82b", default-features = false, features = ["rand", "hkdf"] }
 static_assertions = "1.1.0"
 
 schemars = "0.8.12"

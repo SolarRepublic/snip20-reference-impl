@@ -2,7 +2,8 @@
 
 use constant_time_eq::constant_time_eq;
 use primitive_types::U256;
-use secret_toolkit::{notification::hkdf_sha_256, serialization::{Bincode2, Serde}, storage::Item};
+use secret_toolkit::{serialization::{Bincode2, Serde}, storage::Item};
+use secret_toolkit_crypto::hkdf_sha_256;
 use serde::{Serialize, Deserialize,};
 use serde_big_array::BigArray;
 use cosmwasm_std::{CanonicalAddr, StdError, StdResult, Storage};
