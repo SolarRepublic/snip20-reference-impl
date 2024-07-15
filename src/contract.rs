@@ -1,7 +1,8 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, Api, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128
+    entry_point, to_binary, Addr, Api, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg,
+    Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128,
 };
 use secret_toolkit::notification::hkdf_sha_256;
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
@@ -10,19 +11,23 @@ use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{sha_256, ContractPrng};
 
 use crate::batch;
+use crate::btbe::{
+    find_start_bundle, initialize_btbe, stored_balance, stored_entry, stored_tx_count,
+};
 use crate::dwb::{log_dwb, DelayedWriteBuffer, DWB, TX_NODES};
 use crate::msg::{
-    AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, ExecuteAnswer,
-    ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
+    AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, ExecuteAnswer, ExecuteMsg,
+    InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    safe_add, AllowancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET, PRNG, TOTAL_SUPPLY
+    safe_add, AllowancesStore, Config, MintersStore, PrngStore, ReceiverHashStore, CONFIG,
+    CONTRACT_STATUS, INTERNAL_SECRET, PRNG, TOTAL_SUPPLY,
 };
-use crate::btbe::{find_start_bundle, initialize_btbe, stored_balance, stored_entry, stored_tx_count};
 use crate::strings::TRANSFER_HISTORY_UNSUPPORTED_MSG;
 use crate::transaction_history::{
-    store_burn_action, store_deposit_action, store_mint_action, store_redeem_action, store_transfer_action, Tx  
+    store_burn_action, store_deposit_action, store_mint_action, store_redeem_action,
+    store_transfer_action, Tx,
 };
 
 /// We make sure that responses from `handle` are padded to a multiple of this size.
@@ -98,10 +103,10 @@ pub fn instantiate(
         let amount = balance.amount.u128();
         let balance_address = deps.api.addr_canonicalize(balance.address.as_str())?;
         perform_mint(
-            deps.storage, 
-            &mut rng, 
-            &raw_admin, 
-            &balance_address, 
+            deps.storage,
+            &mut rng,
+            &raw_admin,
+            &balance_address,
             amount,
             msg.symbol.clone(),
             Some("Initial Balance".to_string()),
@@ -171,11 +176,9 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
                 ExecuteMsg::SetContractStatus { level, .. } => {
                     set_contract_status(deps, info, level)
                 }
-                ExecuteMsg::Redeem {
-                    amount,
-                    denom,
-                    ..
-                } if contract_status == ContractStatusLevel::StopAllButRedeems => {
+                ExecuteMsg::Redeem { amount, denom, .. }
+                    if contract_status == ContractStatusLevel::StopAllButRedeems =>
+                {
                     try_redeem(deps, env, info, amount, denom, internal_secret)
                 }
                 _ => Err(StdError::generic_err(
@@ -189,14 +192,10 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
 
     let response = match msg.clone() {
         // Native
-        ExecuteMsg::Deposit { .. } => {
-            try_deposit(deps, env, info, &mut rng, internal_secret)
+        ExecuteMsg::Deposit { .. } => try_deposit(deps, env, info, &mut rng, internal_secret),
+        ExecuteMsg::Redeem { amount, denom, .. } => {
+            try_redeem(deps, env, info, amount, denom, internal_secret)
         }
-        ExecuteMsg::Redeem {
-            amount,
-            denom,
-            ..
-        } => try_redeem(deps, env, info, amount, denom, internal_secret),
 
         // Base
         ExecuteMsg::Transfer {
@@ -234,16 +233,14 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             internal_secret,
         ),
         ExecuteMsg::BatchTransfer { actions, .. } => {
-            try_batch_transfer(deps, env, info, &mut rng, actions, internal_secret,)
+            try_batch_transfer(deps, env, info, &mut rng, actions, internal_secret)
         }
         ExecuteMsg::BatchSend { actions, .. } => {
-            try_batch_send(deps, env, info, &mut rng, actions, internal_secret,)
+            try_batch_send(deps, env, info, &mut rng, actions, internal_secret)
         }
-        ExecuteMsg::Burn {
-            amount,
-            memo,
-            ..
-        } => try_burn(deps, env, info, amount, memo, internal_secret,),
+        ExecuteMsg::Burn { amount, memo, .. } => {
+            try_burn(deps, env, info, amount, memo, internal_secret)
+        }
         ExecuteMsg::RegisterReceive { code_hash, .. } => {
             try_register_receive(deps, info, code_hash)
         }
@@ -302,27 +299,19 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
             internal_secret,
         ),
         ExecuteMsg::BatchTransferFrom { actions, .. } => {
-            try_batch_transfer_from(deps, &env, info, &mut rng, actions, internal_secret,)
+            try_batch_transfer_from(deps, &env, info, &mut rng, actions, internal_secret)
         }
         ExecuteMsg::BatchSendFrom { actions, .. } => {
-            try_batch_send_from(deps, env, &info, &mut rng, actions, internal_secret, )
+            try_batch_send_from(deps, env, &info, &mut rng, actions, internal_secret)
         }
         ExecuteMsg::BurnFrom {
             owner,
             amount,
             memo,
             ..
-        } => try_burn_from(
-            deps,
-            &env,
-            info,
-            owner,
-            amount,
-            memo,
-            internal_secret,
-        ),
+        } => try_burn_from(deps, &env, info, owner, amount, memo, internal_secret),
         ExecuteMsg::BatchBurnFrom { actions, .. } => {
-            try_batch_burn_from(deps, &env, info, actions, internal_secret,)
+            try_batch_burn_from(deps, &env, info, actions, internal_secret)
         }
 
         // Mint
@@ -372,7 +361,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             QueryMsg::Minters { .. } => query_minters(deps),
             QueryMsg::WithPermit { permit, query } => permit_queries(deps, permit, query),
             // FOR TESTING ONLY! REMOVE
-            QueryMsg::Dwb {  } => log_dwb(deps.storage),
+            QueryMsg::Dwb {} => log_dwb(deps.storage),
             _ => viewing_keys_queries(deps, msg),
         },
         RESPONSE_BLOCK_SIZE,
@@ -406,10 +395,7 @@ fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<
         QueryWithPermit::TransferHistory { .. } => {
             return Err(StdError::generic_err(TRANSFER_HISTORY_UNSUPPORTED_MSG));
         }
-        QueryWithPermit::TransactionHistory {
-            page,
-            page_size,
-        } => {
+        QueryWithPermit::TransactionHistory { page, page_size } => {
             if !permit.check_permission(&TokenPermissions::History) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query history, got permissions {:?}",
@@ -417,12 +403,7 @@ fn permit_queries(deps: Deps, permit: Permit, query: QueryWithPermit) -> Result<
                 )));
             }
 
-            query_transactions(
-                deps,
-                account,
-                page.unwrap_or(0),
-                page_size,
-            )
+            query_transactions(deps, account, page.unwrap_or(0), page_size)
         }
         QueryWithPermit::Allowance { owner, spender } => {
             if !permit.check_permission(&TokenPermissions::Allowance) {
@@ -499,18 +480,13 @@ pub fn viewing_keys_queries(deps: Deps, msg: QueryMsg) -> StdResult<Binary> {
                 QueryMsg::Balance { address, .. } => query_balance(deps, address),
                 QueryMsg::TransferHistory { .. } => {
                     return Err(StdError::generic_err(TRANSFER_HISTORY_UNSUPPORTED_MSG));
-                },
+                }
                 QueryMsg::TransactionHistory {
                     address,
                     page,
                     page_size,
                     ..
-                } => query_transactions(
-                    deps,
-                    address,
-                    page.unwrap_or(0),
-                    page_size,
-                ),
+                } => query_transactions(deps, address, page.unwrap_or(0), page_size),
                 QueryMsg::Allowance { owner, spender, .. } => query_allowance(deps, owner, spender),
                 QueryMsg::AllowancesGiven {
                     owner,
@@ -620,10 +596,13 @@ pub fn query_transactions(
     let dwb_index = dwb.recipient_match(&account_raw);
     let mut txs_in_dwb = vec![];
     let txs_in_dwb_count = dwb.entries[dwb_index].list_len()?;
-    if dwb_index > 0 && txs_in_dwb_count > 0 && start < txs_in_dwb_count as u32 { // skip if start is after buffer entries
+    if dwb_index > 0 && txs_in_dwb_count > 0 && start < txs_in_dwb_count as u32 {
+        // skip if start is after buffer entries
         let head_node_index = dwb.entries[dwb_index].head_node()?;
         if head_node_index > 0 {
-            let head_node = TX_NODES.add_suffix(&head_node_index.to_be_bytes()).load(deps.storage)?;
+            let head_node = TX_NODES
+                .add_suffix(&head_node_index.to_be_bytes())
+                .load(deps.storage)?;
             txs_in_dwb = head_node.to_vec(deps.storage, deps.api)?;
         }
     }
@@ -657,10 +636,14 @@ pub fn query_transactions(
                 let mut bundle_idx = tx_bundles_idx_len - 1;
                 loop {
                     let tx_bundle = entry.get_tx_bundle_at(deps.storage, bundle_idx.clone())?;
-                    let head_node = TX_NODES.add_suffix(&tx_bundle.head_node.to_be_bytes()).load(deps.storage)?;
+                    let head_node = TX_NODES
+                        .add_suffix(&tx_bundle.head_node.to_be_bytes())
+                        .load(deps.storage)?;
                     let list_len = tx_bundle.list_len as u32;
                     if txs_left <= list_len {
-                        txs.extend_from_slice(&head_node.to_vec(deps.storage, deps.api)?[0..txs_left as usize]);
+                        txs.extend_from_slice(
+                            &head_node.to_vec(deps.storage, deps.api)?[0..txs_left as usize],
+                        );
                         break;
                     }
                     txs.extend(head_node.to_vec(deps.storage, deps.api)?);
@@ -680,21 +663,24 @@ pub fn query_transactions(
         // bundle tx offsets are chronological, but we need reverse chronological
         // so get the settled start index as if order is reversed
         //println!("OPTION 3");
-        let settled_start = settled_tx_count.saturating_sub(start - txs_in_dwb_count).saturating_sub(1);
-        
-        if let Some((bundle_idx, tx_bundle, start_at)) = find_start_bundle(
-            deps.storage, 
-            &account_raw, 
-            settled_start,
-            internal_secret,
-        )? {
+        let settled_start = settled_tx_count
+            .saturating_sub(start - txs_in_dwb_count)
+            .saturating_sub(1);
+
+        if let Some((bundle_idx, tx_bundle, start_at)) =
+            find_start_bundle(deps.storage, &account_raw, settled_start, internal_secret)?
+        {
             let mut txs_left = end - start;
 
-            let head_node = TX_NODES.add_suffix(&tx_bundle.head_node.to_be_bytes()).load(deps.storage)?;
+            let head_node = TX_NODES
+                .add_suffix(&tx_bundle.head_node.to_be_bytes())
+                .load(deps.storage)?;
             let list_len = tx_bundle.list_len as u32;
             if start_at + txs_left <= list_len {
                 // this first bundle has all the txs we need
-                txs = head_node.to_vec(deps.storage, deps.api)?[start_at as usize..(start_at + txs_left) as usize].to_vec();
+                txs = head_node.to_vec(deps.storage, deps.api)?
+                    [start_at as usize..(start_at + txs_left) as usize]
+                    .to_vec();
             } else {
                 // get the rest of the txs in this bundle and then go back through history
                 txs = head_node.to_vec(deps.storage, deps.api)?[start_at as usize..].to_vec();
@@ -705,11 +691,17 @@ pub fn query_transactions(
                     let mut bundle_idx = bundle_idx - 1;
                     if let Some(entry) = account_stored_entry {
                         loop {
-                            let tx_bundle = entry.get_tx_bundle_at(deps.storage, bundle_idx.clone())?;
-                            let head_node = TX_NODES.add_suffix(&tx_bundle.head_node.to_be_bytes()).load(deps.storage)?;
+                            let tx_bundle =
+                                entry.get_tx_bundle_at(deps.storage, bundle_idx.clone())?;
+                            let head_node = TX_NODES
+                                .add_suffix(&tx_bundle.head_node.to_be_bytes())
+                                .load(deps.storage)?;
                             let list_len = tx_bundle.list_len as u32;
                             if txs_left <= list_len {
-                                txs.extend_from_slice(&head_node.to_vec(deps.storage, deps.api)?[0..txs_left as usize]);
+                                txs.extend_from_slice(
+                                    &head_node.to_vec(deps.storage, deps.api)?
+                                        [0..txs_left as usize],
+                                );
                                 break;
                             }
                             txs.extend(head_node.to_vec(deps.storage, deps.api)?);
@@ -721,7 +713,7 @@ pub fn query_transactions(
                             }
                         }
                     }
-                }   
+                }
             }
         }
     }
@@ -846,7 +838,17 @@ fn try_mint_impl(
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
     let raw_minter = deps.api.addr_canonicalize(minter.as_str())?;
 
-    perform_mint(deps.storage, rng, &raw_minter, &raw_recipient, raw_amount, denom, memo, block, internal_secret)?;
+    perform_mint(
+        deps.storage,
+        rng,
+        &raw_minter,
+        &raw_recipient,
+        raw_amount,
+        denom,
+        memo,
+        block,
+        internal_secret,
+    )?;
 
     Ok(())
 }
@@ -1113,7 +1115,15 @@ fn try_deposit(
 
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
 
-    perform_deposit(deps.storage, rng, &sender_address, raw_amount, "uscrt".to_string(), &env.block, internal_secret,)?;
+    perform_deposit(
+        deps.storage,
+        rng,
+        &sender_address,
+        raw_amount,
+        "uscrt".to_string(),
+        &env.block,
+        internal_secret,
+    )?;
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::Deposit { status: Success })?))
 }
@@ -1153,18 +1163,20 @@ fn try_redeem(
     let sender_address = deps.api.addr_canonicalize(info.sender.as_str())?;
     let amount_raw = amount.u128();
 
-    let tx_id = store_redeem_action(
-        deps.storage,
-        amount.u128(),
-        constants.symbol,
-        &env.block,
-    )?;
+    let tx_id = store_redeem_action(deps.storage, amount.u128(), constants.symbol, &env.block)?;
 
     // load delayed write buffer
     let mut dwb = DWB.load(deps.storage)?;
 
     // settle the signer's account in buffer
-    dwb.settle_sender_or_owner_account(deps.storage, &sender_address, tx_id, amount_raw, "redeem", internal_secret)?;
+    dwb.settle_sender_or_owner_account(
+        deps.storage,
+        &sender_address,
+        tx_id,
+        amount_raw,
+        "redeem",
+        internal_secret,
+    )?;
 
     DWB.save(deps.storage, &dwb)?;
 
@@ -1274,8 +1286,8 @@ fn try_transfer(
     )?;
 
     // TESTING
-    let mut resp = Response::new()
-        .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?);
+    let mut resp =
+        Response::new().set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?);
     for log in logs {
         resp = resp.add_attribute_plaintext(log.0, log.1);
     }
@@ -1283,7 +1295,7 @@ fn try_transfer(
     Ok(
         //Response::new()
         //    .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?)
-        resp
+        resp,
     )
 }
 
@@ -1753,22 +1765,37 @@ fn try_burn_from(
     let raw_burner = deps.api.addr_canonicalize(info.sender.as_str())?;
 
     let tx_id = store_burn_action(
-        deps.storage, 
+        deps.storage,
         raw_owner.clone(),
-        raw_burner.clone(), 
+        raw_burner.clone(),
         raw_amount,
         constants.symbol,
-        memo, 
-        &env.block
+        memo,
+        &env.block,
     )?;
 
     // load delayed write buffer
     let mut dwb = DWB.load(deps.storage)?;
 
     // settle the owner's account in buffer
-    dwb.settle_sender_or_owner_account(deps.storage, &raw_owner, tx_id, raw_amount, "burn", internal_secret)?;
-    if raw_burner != raw_owner { // also settle sender's account
-        dwb.settle_sender_or_owner_account(deps.storage, &raw_burner, tx_id, 0, "burn", internal_secret)?;
+    dwb.settle_sender_or_owner_account(
+        deps.storage,
+        &raw_owner,
+        tx_id,
+        raw_amount,
+        "burn",
+        internal_secret,
+    )?;
+    if raw_burner != raw_owner {
+        // also settle sender's account
+        dwb.settle_sender_or_owner_account(
+            deps.storage,
+            &raw_burner,
+            tx_id,
+            0,
+            "burn",
+            internal_secret,
+        )?;
     }
 
     DWB.save(deps.storage, &dwb)?;
@@ -1812,24 +1839,38 @@ fn try_batch_burn_from(
         use_allowance(deps.storage, env, &owner, &info.sender, amount)?;
 
         let tx_id = store_burn_action(
-            deps.storage, 
+            deps.storage,
             raw_owner.clone(),
-            raw_spender.clone(), 
+            raw_spender.clone(),
             amount,
             constants.symbol.clone(),
-            action.memo.clone(), 
-            &env.block
+            action.memo.clone(),
+            &env.block,
         )?;
-    
+
         // load delayed write buffer
         let mut dwb = DWB.load(deps.storage)?;
-    
+
         // settle the owner's account in buffer
-        dwb.settle_sender_or_owner_account(deps.storage, &raw_owner, tx_id, amount, "burn", internal_secret)?;
+        dwb.settle_sender_or_owner_account(
+            deps.storage,
+            &raw_owner,
+            tx_id,
+            amount,
+            "burn",
+            internal_secret,
+        )?;
         if raw_spender != raw_owner {
-            dwb.settle_sender_or_owner_account(deps.storage, &raw_spender, tx_id, 0, "burn", internal_secret)?;
+            dwb.settle_sender_or_owner_account(
+                deps.storage,
+                &raw_spender,
+                tx_id,
+                0,
+                "burn",
+                internal_secret,
+            )?;
         }
-    
+
         DWB.save(deps.storage, &dwb)?;
 
         // remove from supply
@@ -2020,20 +2061,27 @@ fn try_burn(
     let raw_burn_address = deps.api.addr_canonicalize(info.sender.as_str())?;
 
     let tx_id = store_burn_action(
-        deps.storage, 
+        deps.storage,
         raw_burn_address.clone(),
-        raw_burn_address.clone(), 
+        raw_burn_address.clone(),
         raw_amount,
         constants.symbol,
-        memo, 
-        &env.block
+        memo,
+        &env.block,
     )?;
 
     // load delayed write buffer
     let mut dwb = DWB.load(deps.storage)?;
 
     // settle the signer's account in buffer
-    dwb.settle_sender_or_owner_account(deps.storage, &raw_burn_address, tx_id, raw_amount, "burn", internal_secret)?;
+    dwb.settle_sender_or_owner_account(
+        deps.storage,
+        &raw_burn_address,
+        tx_id,
+        raw_amount,
+        "burn",
+        internal_secret,
+    )?;
 
     DWB.save(deps.storage, &dwb)?;
 
@@ -2207,9 +2255,8 @@ mod tests {
     use std::any::Any;
 
     use cosmwasm_std::{
-        testing::*, Api,
-        from_binary, BlockInfo, ContractInfo, MessageInfo, OwnedDeps, QueryResponse, ReplyOn,
-        SubMsg, Timestamp, TransactionInfo, WasmMsg,
+        from_binary, testing::*, Api, BlockInfo, ContractInfo, MessageInfo, OwnedDeps,
+        QueryResponse, ReplyOn, SubMsg, Timestamp, TransactionInfo, WasmMsg,
     };
     use secret_toolkit::permit::{PermitParams, PermitSignature, PubKey};
 
@@ -2455,7 +2502,7 @@ mod tests {
             init_result.err().unwrap()
         );
 
-        /* 
+        /*
         let (init_result, _deps) = init_helper(vec![
             InitialBalance {
                 address: "lebron".to_string(),
@@ -2519,9 +2566,15 @@ mod tests {
         let internal_secret = INTERNAL_SECRET.load(&deps.storage).unwrap();
         let internal_secret = internal_secret.as_slice();
 
-        assert_eq!(5000 - 1000, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
+        assert_eq!(
+            5000 - 1000,
+            stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap()
+        );
         // alice has not been settled yet
-        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
+        assert_ne!(
+            1000,
+            stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap()
+        );
 
         let dwb = DWB.load(&deps.storage).unwrap();
         println!("DWB: {dwb:?}");
@@ -2531,10 +2584,10 @@ mod tests {
         let alice_entry = dwb.entries[2];
         assert_eq!(1, alice_entry.list_len().unwrap());
         assert_eq!(1000, alice_entry.amount().unwrap());
-        // the id of the head_node 
+        // the id of the head_node
         assert_eq!(4, alice_entry.head_node().unwrap());
         let tx_count = TX_COUNT.load(&deps.storage).unwrap_or_default();
-        assert_eq!(2, tx_count); 
+        assert_eq!(2, tx_count);
 
         //let tx_node1 = TX_NODES.add_suffix(&1u64.to_be_bytes()).load(&deps.storage).unwrap();
         //println!("tx node 1: {tx_node1:?}");
@@ -2561,11 +2614,20 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("charlie").as_str())
             .unwrap();
 
-        assert_eq!(5000 - 1000 - 100, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
+        assert_eq!(
+            5000 - 1000 - 100,
+            stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap()
+        );
         // alice has not been settled yet
-        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
+        assert_ne!(
+            1000,
+            stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap()
+        );
         // charlie has not been settled yet
-        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr, internal_secret).unwrap());
+        assert_ne!(
+            100,
+            stored_balance(&deps.storage, &charlie_addr, internal_secret).unwrap()
+        );
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2575,10 +2637,10 @@ mod tests {
         let charlie_entry = dwb.entries[3];
         assert_eq!(1, charlie_entry.list_len().unwrap());
         assert_eq!(100, charlie_entry.amount().unwrap());
-        // the id of the head_node 
+        // the id of the head_node
         assert_eq!(6, charlie_entry.head_node().unwrap());
         let tx_count = TX_COUNT.load(&deps.storage).unwrap_or_default();
-        assert_eq!(3, tx_count); 
+        assert_eq!(3, tx_count);
 
         // send another 500 to alice from bob
         let handle_msg = ExecuteMsg::Transfer {
@@ -2595,9 +2657,15 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(5000 - 1000 - 100 - 500, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
+        assert_eq!(
+            5000 - 1000 - 100 - 500,
+            stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap()
+        );
         // make sure alice has not been settled yet
-        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
+        assert_ne!(
+            1500,
+            stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap()
+        );
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2607,49 +2675,50 @@ mod tests {
         let alice_entry = dwb.entries[2];
         assert_eq!(2, alice_entry.list_len().unwrap());
         assert_eq!(1500, alice_entry.amount().unwrap());
-        // the id of the head_node 
+        // the id of the head_node
         assert_eq!(8, alice_entry.head_node().unwrap());
         let tx_count = TX_COUNT.load(&deps.storage).unwrap_or_default();
-        assert_eq!(4, tx_count); 
+        assert_eq!(4, tx_count);
 
         // convert head_node to vec
-        let alice_nodes = TX_NODES.add_suffix(
-            &alice_entry
-                .head_node().unwrap()
-                .to_be_bytes()).load(&deps.storage).unwrap()
-                .to_vec(&deps.storage, &deps.api).unwrap();
+        let alice_nodes = TX_NODES
+            .add_suffix(&alice_entry.head_node().unwrap().to_be_bytes())
+            .load(&deps.storage)
+            .unwrap()
+            .to_vec(&deps.storage, &deps.api)
+            .unwrap();
 
         let expected_alice_nodes: Vec<Tx> = vec![
-            Tx { 
-                id: 4, 
-                action: TxAction::Transfer { 
+            Tx {
+                id: 4,
+                action: TxAction::Transfer {
                     from: Addr::unchecked("bob"),
                     sender: Addr::unchecked("bob"),
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin {
-                    amount: Uint128::from(500_u128), 
-                    denom: "SECSEC".to_string(),
-                },
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 2, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
+                    recipient: Addr::unchecked("alice"),
                 },
                 coins: Coin {
-                    amount: Uint128::from(1000_u128), 
+                    amount: Uint128::from(500_u128),
                     denom: "SECSEC".to_string(),
                 },
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 2,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    amount: Uint128::from(1000_u128),
+                    denom: "SECSEC".to_string(),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
         ];
         assert_eq!(alice_nodes, expected_alice_nodes);
 
@@ -2673,13 +2742,25 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("ernie").as_str())
             .unwrap();
 
-        assert_eq!(5000 - 1000 - 100 - 500 - 200, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
+        assert_eq!(
+            5000 - 1000 - 100 - 500 - 200,
+            stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap()
+        );
         // alice has not been settled yet
-        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
+        assert_ne!(
+            1500,
+            stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap()
+        );
         // charlie has not been settled yet
-        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr, internal_secret).unwrap());
+        assert_ne!(
+            100,
+            stored_balance(&deps.storage, &charlie_addr, internal_secret).unwrap()
+        );
         // ernie has not been settled yet
-        assert_ne!(200, stored_balance(&deps.storage, &ernie_addr, internal_secret).unwrap());
+        assert_ne!(
+            200,
+            stored_balance(&deps.storage, &ernie_addr, internal_secret).unwrap()
+        );
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2690,10 +2771,10 @@ mod tests {
         let ernie_entry = dwb.entries[4];
         assert_eq!(1, ernie_entry.list_len().unwrap());
         assert_eq!(200, ernie_entry.amount().unwrap());
-        // the id of the head_node 
+        // the id of the head_node
         assert_eq!(10, ernie_entry.head_node().unwrap());
         let tx_count = TX_COUNT.load(&deps.storage).unwrap_or_default();
-        assert_eq!(5, tx_count); 
+        assert_eq!(5, tx_count);
 
         // now alice sends 50 to dora
         // this should settle alice and create entry for dora
@@ -2716,9 +2797,15 @@ mod tests {
             .unwrap();
 
         // alice has been settled
-        assert_eq!(1500 - 50, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
+        assert_eq!(
+            1500 - 50,
+            stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap()
+        );
         // dora has not been settled
-        assert_ne!(50, stored_balance(&deps.storage, &dora_addr, internal_secret).unwrap());
+        assert_ne!(
+            50,
+            stored_balance(&deps.storage, &dora_addr, internal_secret).unwrap()
+        );
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2729,7 +2816,7 @@ mod tests {
         let dora_entry = dwb.entries[5];
         assert_eq!(1, dora_entry.list_len().unwrap());
         assert_eq!(50, dora_entry.amount().unwrap());
-        // the id of the head_node 
+        // the id of the head_node
         assert_eq!(12, dora_entry.head_node().unwrap());
         let tx_count = TX_COUNT.load(&deps.storage).unwrap_or_default();
         assert_eq!(6, tx_count);
@@ -2746,13 +2833,16 @@ mod tests {
             };
             let info = mock_info("bob", &[]);
             let mut env = mock_env();
-            env.block.random = Some(Binary::from(&[255-i; 32]));
+            env.block.random = Some(Binary::from(&[255 - i; 32]));
             let handle_result = execute(deps.as_mut(), env, info, handle_msg);
 
             let result = handle_result.unwrap();
             assert!(ensure_success(result));
         }
-        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
+        assert_eq!(
+            5000 - 1000 - 100 - 500 - 200 - 59,
+            stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap()
+        );
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2776,7 +2866,10 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59 - 1, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
+        assert_eq!(
+            5000 - 1000 - 100 - 500 - 200 - 59 - 1,
+            stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap()
+        );
 
         //let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2797,7 +2890,10 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(5000 - 1000 - 100 - 500 - 200 - 59 - 1 - 1, stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap());
+        assert_eq!(
+            5000 - 1000 - 100 - 500 - 200 - 59 - 1 - 1,
+            stored_balance(&deps.storage, &bob_addr, internal_secret).unwrap()
+        );
 
         //let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -2814,14 +2910,17 @@ mod tests {
 
             let info = mock_info("bob", &[]);
             let mut env = mock_env();
-            env.block.random = Some(Binary::from(&[125-i; 32]));
+            env.block.random = Some(Binary::from(&[125 - i; 32]));
             let handle_result = execute(deps.as_mut(), env, info, handle_msg);
 
             let result = handle_result.unwrap();
             assert!(ensure_success(result));
 
             // alice should not settle
-            assert_eq!(1500 - 50, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
+            assert_eq!(
+                1500 - 50,
+                stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap()
+            );
         }
 
         // alice sends 1 to dora to settle
@@ -2840,7 +2939,10 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(2724, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
+        assert_eq!(
+            2724,
+            stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap()
+        );
 
         // now we send 50 more transactions to alice from bob
         for i in 1..=50 {
@@ -2854,14 +2956,17 @@ mod tests {
 
             let info = mock_info("bob", &[]);
             let mut env = mock_env();
-            env.block.random = Some(Binary::from(&[200-i; 32]));
+            env.block.random = Some(Binary::from(&[200 - i; 32]));
             let handle_result = execute(deps.as_mut(), env, info, handle_msg);
 
             let result = handle_result.unwrap();
             assert!(ensure_success(result));
 
             // alice should not settle
-            assert_eq!(2724, stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap());
+            assert_eq!(
+                2724,
+                stored_balance(&deps.storage, &alice_addr, internal_secret).unwrap()
+            );
         }
 
         let handle_msg = ExecuteMsg::SetViewingKey {
@@ -2890,7 +2995,7 @@ mod tests {
         assert_eq!(balance, Uint128::new(3999));
 
         // now we use alice to check query transaction history pagination works
-        
+
         //
         // check last 3 transactions for alice (all in dwb)
         //
@@ -2907,55 +3012,56 @@ mod tests {
         };
         //println!("transfers: {transfers:?}");
         let expected_transfers = vec![
-            Tx { 
-                id: 168, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(50u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 167, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(49u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 166, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(48u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
+            Tx {
+                id: 168,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(50u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 167,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(49u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 166,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(48u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
             },
         ];
         assert_eq!(transfers, expected_transfers);
 
         //
-        // check 6 transactions for alice that span over end of the 50 in dwb and settled 
+        // check 6 transactions for alice that span over end of the 50 in dwb and settled
         // page: 8, page size: 6
         // start is index 48
         //
@@ -2972,96 +3078,96 @@ mod tests {
         };
         //println!("transfers: {transfers:?}");
         let expected_transfers = vec![
-            Tx { 
-                id: 120, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(2u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 119, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
+            Tx {
+                id: 120,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
                     denom: "SECSEC".to_string(),
-                    amount: Uint128::from(1u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 118, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("alice"), 
-                    sender: Addr::unchecked("alice"), 
-                    recipient: Addr::unchecked("dora") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(1u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 117, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(50u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 116, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(49u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 115, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(48u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }
+                    amount: Uint128::from(2u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 119,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(1u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 118,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("alice"),
+                    sender: Addr::unchecked("alice"),
+                    recipient: Addr::unchecked("dora"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(1u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 117,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(50u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 116,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(49u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 115,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(48u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
         ];
         assert_eq!(transfers, expected_transfers);
 
@@ -3086,82 +3192,81 @@ mod tests {
         };
         //println!("transfers: {transfers:?}");
         let expected_transfers = vec![
-            Tx { 
-                id: 69, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(2u128) 
-                }, 
-                memo: None, 
-                block_time: 
-                1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 68, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(1u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 6, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("alice"), 
-                    sender: Addr::unchecked("alice"), 
-                    recipient: Addr::unchecked("dora") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(50u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 4, 
-                action: TxAction::Transfer { 
+            Tx {
+                id: 69,
+                action: TxAction::Transfer {
                     from: Addr::unchecked("bob"),
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(500u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }, 
-            Tx { 
-                id: 2, 
-                action: TxAction::Transfer { 
-                    from: Addr::unchecked("bob"), 
-                    sender: Addr::unchecked("bob"), 
-                    recipient: Addr::unchecked("alice") 
-                }, 
-                coins: Coin { 
-                    denom: "SECSEC".to_string(), 
-                    amount: Uint128::from(1000u128) 
-                }, 
-                memo: None, 
-                block_time: 1571797419, 
-                block_height: 12345 
-            }
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(2u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 68,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(1u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 6,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("alice"),
+                    sender: Addr::unchecked("alice"),
+                    recipient: Addr::unchecked("dora"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(50u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 4,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(500u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
+            Tx {
+                id: 2,
+                action: TxAction::Transfer {
+                    from: Addr::unchecked("bob"),
+                    sender: Addr::unchecked("bob"),
+                    recipient: Addr::unchecked("alice"),
+                },
+                coins: Coin {
+                    denom: "SECSEC".to_string(),
+                    amount: Uint128::from(1000u128),
+                },
+                memo: None,
+                block_time: 1571797419,
+                block_height: 12345,
+            },
         ];
         //let transfers_len = transfers.len();
         //println!("transfers.len(): {transfers_len}");
@@ -3646,9 +3751,15 @@ mod tests {
                     height: 12_345,
                     time: Timestamp::from_seconds(1_571_797_420),
                     chain_id: "cosmos-testnet-14002".to_string(),
-                    random: Some(Binary::from(&[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31])),
+                    random: Some(Binary::from(&[
+                        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                        21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+                    ])),
                 },
-                transaction: Some(TransactionInfo { index: 3, hash: "1010".to_string()}),
+                transaction: Some(TransactionInfo {
+                    index: 3,
+                    hash: "1010".to_string(),
+                }),
                 contract: ContractInfo {
                     address: Addr::unchecked(MOCK_CONTRACT_ADDR.to_string()),
                     code_hash: "".to_string(),
@@ -3690,7 +3801,8 @@ mod tests {
         let internal_secret = internal_secret.as_slice();
 
         let bob_balance = stored_balance(&deps.storage, &bob_canonical, internal_secret).unwrap();
-        let alice_balance = stored_balance(&deps.storage, &alice_canonical, internal_secret).unwrap();
+        let alice_balance =
+            stored_balance(&deps.storage, &alice_canonical, internal_secret).unwrap();
         assert_eq!(bob_balance, 5000 - 2000);
         assert_ne!(alice_balance, 2000);
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -3836,7 +3948,8 @@ mod tests {
         let internal_secret = internal_secret.as_slice();
 
         let bob_balance = stored_balance(&deps.storage, &bob_canonical, internal_secret).unwrap();
-        let contract_balance = stored_balance(&deps.storage, &contract_canonical, internal_secret).unwrap();
+        let contract_balance =
+            stored_balance(&deps.storage, &contract_canonical, internal_secret).unwrap();
         assert_eq!(bob_balance, 5000 - 2000);
         assert_ne!(contract_balance, 2000);
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -4114,7 +4227,7 @@ mod tests {
             "handle() failed: {}",
             handle_result.err().unwrap()
         );
-        
+
         let internal_secret = INTERNAL_SECRET.load(&deps.storage).unwrap();
         let internal_secret = internal_secret.as_slice();
 
@@ -4507,7 +4620,15 @@ mod tests {
             .api
             .addr_canonicalize(Addr::unchecked("butler".to_string()).as_str())
             .unwrap();
-        assert_eq!(stored_balance(&deps.storage, &canonical, INTERNAL_SECRET.load(&deps.storage).unwrap().as_slice()).unwrap(), 3000)
+        assert_eq!(
+            stored_balance(
+                &deps.storage,
+                &canonical,
+                INTERNAL_SECRET.load(&deps.storage).unwrap().as_slice()
+            )
+            .unwrap(),
+            3000
+        )
     }
 
     #[test]
@@ -4540,9 +4661,7 @@ mod tests {
             init_result_for_failure.err().unwrap()
         );
         // test when deposit disabled
-        let handle_msg = ExecuteMsg::Deposit {
-            padding: None,
-        };
+        let handle_msg = ExecuteMsg::Deposit { padding: None };
         let info = mock_info(
             "lebron",
             &[Coin {
@@ -4555,9 +4674,7 @@ mod tests {
         let error = extract_error_msg(handle_result);
         assert!(error.contains("Tried to deposit an unsupported coin uscrt"));
 
-        let handle_msg = ExecuteMsg::Deposit {
-            padding: None,
-        };
+        let handle_msg = ExecuteMsg::Deposit { padding: None };
 
         let info = mock_info(
             "lebron",
@@ -4580,7 +4697,15 @@ mod tests {
             .unwrap();
 
         // stored balance not updated, still in dwb
-        assert_ne!(stored_balance(&deps.storage, &canonical, INTERNAL_SECRET.load(&deps.storage).unwrap().as_slice()).unwrap(), 6000);
+        assert_ne!(
+            stored_balance(
+                &deps.storage,
+                &canonical,
+                INTERNAL_SECRET.load(&deps.storage).unwrap().as_slice()
+            )
+            .unwrap(),
+            6000
+        );
 
         let create_vk_msg = ExecuteMsg::CreateViewingKey {
             entropy: "34".to_string(),
@@ -6122,9 +6247,7 @@ mod tests {
 
         assert!(ensure_success(handle_result.unwrap()));
 
-        let handle_msg = ExecuteMsg::Deposit {
-            padding: None,
-        };
+        let handle_msg = ExecuteMsg::Deposit { padding: None };
         let info = mock_info(
             "bob",
             &[Coin {
@@ -6307,5 +6430,4 @@ mod tests {
 
         assert_eq!(transfers, expected_transfers);
     }
-
 }

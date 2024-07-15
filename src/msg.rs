@@ -220,9 +220,13 @@ pub enum ExecuteMsg {
         padding: Option<String>,
     },
     /// Add deposit/redeem support for these coin denoms
-    AddSupportedDenoms { denoms: Vec<String> },
+    AddSupportedDenoms {
+        denoms: Vec<String>,
+    },
     /// Remove deposit/redeem support for these coin denoms
-    RemoveSupportedDenoms { denoms: Vec<String> },
+    RemoveSupportedDenoms {
+        denoms: Vec<String>,
+    },
 
     // Permit
     RevokePermit {
@@ -383,7 +387,7 @@ pub enum QueryMsg {
     },
 
     /// FOR TESTING ONLY! REMOVE
-    Dwb { },
+    Dwb {},
 }
 
 impl QueryMsg {

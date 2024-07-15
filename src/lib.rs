@@ -2,11 +2,11 @@
 extern crate static_assertions as sa;
 
 mod batch;
+mod btbe;
 pub mod contract;
+mod dwb;
 pub mod msg;
 pub mod receiver;
 pub mod state;
-mod transaction_history;
-mod dwb;
-mod btbe;
 mod strings;
+mod transaction_history;
