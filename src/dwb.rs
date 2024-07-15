@@ -43,14 +43,6 @@ pub struct DelayedWriteBuffer {
     pub entries: [DelayedWriteBufferEntry; DWB_LEN as usize],
 }
 
-//#[inline]
-//fn random_addr(rng: &mut ContractPrng) -> CanonicalAddr {
-//    #[cfg(test)]
-//    return CanonicalAddr::from(&[rng.rand_bytes(), rng.rand_bytes()].concat()[0..DWB_RECIPIENT_BYTES]); // because mock canonical addr is 54 bytes
-//    #[cfg(not(test))]
-//    CanonicalAddr::from(&rng.rand_bytes()[0..DWB_RECIPIENT_BYTES]) // canonical addr is 20 bytes (less than 32)
-//}
-
 pub fn random_in_range(rng: &mut ContractPrng, a: u32, b: u32) -> StdResult<u32> {
     if b <= a {
         return Err(StdError::generic_err("invalid range"));
@@ -105,20 +97,6 @@ impl DelayedWriteBuffer {
         dwb_entry.add_tx_node(store, tx_id)?;
 
         merge_dwb_entry(store, dwb_entry, Some(amount_spent), internal_secret)
-/* 
-        let head_node = entry.add_tx_node(store, tx_id)?;
-
-        AccountTxsStore::append_bundle(
-            store,
-            address,
-            head_node,
-            entry.list_len()?,
-        )?;
-    
-        BalancesStore::save(store, address, new_balance)?;
-    
-        Ok(())
-*/
     }
 
     /// "releases" a given recipient from the buffer, removing their entry if one exists, in constant-time
@@ -149,16 +127,6 @@ impl DelayedWriteBuffer {
 
         Ok((balance, entry))
     }
-
-    //fn unique_random_entry(&self, rng: &mut ContractPrng) -> StdResult<DelayedWriteBufferEntry> {
-    //    // produce a new random address
-    //    let mut replacement_address = random_addr(rng);
-    //    // ensure random addr is not already in dwb (extremely unlikely!!)
-    //    while self.recipient_match(&replacement_address) > 0 {
-    //        replacement_address = random_addr(rng);
-    //    }
-    //    DelayedWriteBufferEntry::new(replacement_address)
-    //}
 
     // returns matched index for a given address
     pub fn recipient_match(&self, address: &CanonicalAddr) -> usize {
