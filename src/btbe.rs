@@ -254,7 +254,6 @@ pub struct BtbeBucket {
     pub entries: [StoredEntry; BTBE_BUCKET_LEN as usize],
 }
 
-//static BTBE_ENTRY_HISTORY: Item<u64> = Item::new(KEY_BTBE_ENTRY_HISTORY);
 static BTBE_BUCKETS_COUNT: Item<u64> = Item::new(KEY_BTBE_BUCKETS_COUNT);
 static BTBE_BUCKETS: Item<BtbeBucket> = Item::new(KEY_BTBE_BUCKETS);
 
