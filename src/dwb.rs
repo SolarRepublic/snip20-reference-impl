@@ -66,7 +66,7 @@ impl DelayedWriteBuffer {
         Ok(Self {
             empty_space_counter: DWB_LEN - 1,
             // first entry is a dummy entry for constant-time writing
-            entries: [DelayedWriteBufferEntry::new(CanonicalAddr::from(&ZERO_ADDR))?;
+            entries: [DelayedWriteBufferEntry::new(&CanonicalAddr::from(&ZERO_ADDR))?;
                 DWB_LEN as usize],
         })
     }
@@ -94,7 +94,7 @@ impl DelayedWriteBuffer {
 
         dwb_entry.add_tx_node(store, tx_id)?;
 
-        merge_dwb_entry(store, dwb_entry, Some(amount_spent), internal_secret)
+        merge_dwb_entry(store, &dwb_entry, Some(amount_spent), internal_secret)
     }
 
     /// "releases" a given recipient from the buffer, removing their entry if one exists, in constant-time
@@ -115,7 +115,7 @@ impl DelayedWriteBuffer {
         let entry = self.entries[matched_entry_idx];
 
         // create a new entry to replace the released one, giving it the same address to avoid introducing random addresses
-        let replacement_entry = DelayedWriteBufferEntry::new(entry.recipient()?)?;
+        let replacement_entry = DelayedWriteBufferEntry::new(&entry.recipient()?)?;
 
         // add entry amount to the stored balance for the address (will be 0 if dummy)
         safe_add(&mut balance, entry.amount()? as u128);
@@ -201,7 +201,7 @@ impl DelayedWriteBuffer {
         // settle the entry
         merge_dwb_entry(
             store,
-            self.entries[actual_settle_index],
+            &self.entries[actual_settle_index],
             None,
             internal_secret,
         )?;
@@ -261,7 +261,7 @@ pub const ZERO_ADDR: [u8; DWB_RECIPIENT_BYTES] = [0u8; DWB_RECIPIENT_BYTES];
 pub struct DelayedWriteBufferEntry(#[serde(with = "BigArray")] [u8; DWB_ENTRY_BYTES]);
 
 impl DelayedWriteBufferEntry {
-    pub fn new(recipient: CanonicalAddr) -> StdResult<Self> {
+    pub fn new(recipient: &CanonicalAddr) -> StdResult<Self> {
         let recipient = recipient.as_slice();
         if recipient.len() != DWB_RECIPIENT_BYTES {
             return Err(StdError::generic_err("dwb: invalid recipient length"));
@@ -495,7 +495,7 @@ mod tests {
         let _info = mock_info("bob", &[]);
 
         let recipient = CanonicalAddr::from(ZERO_ADDR);
-        let mut dwb_entry = DelayedWriteBufferEntry::new(recipient).unwrap();
+        let mut dwb_entry = DelayedWriteBufferEntry::new(&recipient).unwrap();
         assert_eq!(dwb_entry, DelayedWriteBufferEntry([0u8; DWB_ENTRY_BYTES]));
 
         assert_eq!(

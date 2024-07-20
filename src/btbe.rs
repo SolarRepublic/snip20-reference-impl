@@ -62,7 +62,7 @@ const IMPOSSIBLE_ADDR: [u8; BTBE_BUCKET_ADDRESS_BYTES] = [
 pub struct StoredEntry(#[serde(with = "BigArray")] [u8; BTBE_BUCKET_ENTRY_BYTES]);
 
 impl StoredEntry {
-    fn new(address: CanonicalAddr) -> StdResult<Self> {
+    fn new(address: &CanonicalAddr) -> StdResult<Self> {
         let address = address.as_slice();
 
         if address.len() != BTBE_BUCKET_ADDRESS_BYTES {
@@ -79,7 +79,7 @@ impl StoredEntry {
         dwb_entry: &DelayedWriteBufferEntry,
         amount_spent: Option<u128>,
     ) -> StdResult<Self> {
-        let mut entry = StoredEntry::new(dwb_entry.recipient()?)?;
+        let mut entry = StoredEntry::new(&dwb_entry.recipient()?)?;
 
         let amount_spent = amount_u64(amount_spent)?;
 
@@ -87,7 +87,7 @@ impl StoredEntry {
         let balance = if let Some(new_balance) = dwb_entry.amount()?.checked_sub(amount_spent) {
             new_balance
         } else {
-            return Err(StdError::generic_err(format!("insufficient funds",)));
+            return Err(StdError::generic_err(format!("insufficient funds")));
         };
 
         entry.set_balance(balance)?;
@@ -264,7 +264,7 @@ impl BtbeBucket {
     pub fn new() -> StdResult<Self> {
         Ok(Self {
             capacity: BTBE_BUCKET_LEN,
-            entries: [StoredEntry::new(CanonicalAddr::from(&IMPOSSIBLE_ADDR))?;
+            entries: [StoredEntry::new(&CanonicalAddr::from(&IMPOSSIBLE_ADDR))?;
                 BTBE_BUCKET_LEN as usize],
         })
     }
@@ -508,7 +508,7 @@ pub fn stored_tx_count(storage: &dyn Storage, entry: &Option<StoredEntry>) -> St
 // `spent_amount` is any required subtraction due to being sender of tx
 pub fn merge_dwb_entry(
     storage: &mut dyn Storage,
-    dwb_entry: DelayedWriteBufferEntry,
+    dwb_entry: &DelayedWriteBufferEntry,
     amount_spent: Option<u128>,
     internal_secret: &[u8],
 ) -> StdResult<()> {
@@ -658,4 +658,126 @@ pub fn initialize_btbe(storage: &mut dyn Storage) -> StdResult<()> {
         .save(storage, &node)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+
+    use crate::contract::instantiate;
+    use crate::msg::{InitialBalance, InstantiateMsg, QueryAnswer};
+    use cosmwasm_std::{from_binary, testing::*, Addr, Api, Binary, OwnedDeps, QueryResponse, Response, Uint128};
+
+    use super::*;
+
+    fn init_helper(
+        initial_balances: Vec<InitialBalance>,
+    ) -> (
+        StdResult<Response>,
+        OwnedDeps<MockStorage, MockApi, MockQuerier>,
+    ) {
+        let mut deps = mock_dependencies_with_balance(&[]);
+        let env = mock_env();
+        let info = mock_info("instantiator", &[]);
+
+        let init_msg = InstantiateMsg {
+            name: "sec-sec".to_string(),
+            admin: Some("admin".to_string()),
+            symbol: "SECSEC".to_string(),
+            decimals: 8,
+            initial_balances: Some(initial_balances),
+            prng_seed: Binary::from("lolz fun yay".as_bytes()),
+            config: None,
+            supported_denoms: None,
+        };
+
+        (instantiate(deps.as_mut(), env, info, init_msg), deps)
+    }
+
+    fn extract_error_msg<T: Any>(error: StdResult<T>) -> String {
+        match error {
+            Ok(response) => {
+                let bin_err = (&response as &dyn Any)
+                    .downcast_ref::<QueryResponse>()
+                    .expect("An error was expected, but no error could be extracted");
+                match from_binary(bin_err).unwrap() {
+                    QueryAnswer::ViewingKeyError { msg } => msg,
+                    _ => panic!("Unexpected query answer"),
+                }
+            }
+            Err(err) => match err {
+                StdError::GenericErr { msg, .. } => msg,
+                _ => panic!("Unexpected result from init"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_stored_entry() {
+        let (init_result, mut deps) = init_helper(vec![InitialBalance {
+            address: "bob".to_string(),
+            amount: Uint128::new(5000),
+        }]);
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+        let env = mock_env();
+        let _info = mock_info("bob", &[]);
+
+        let canonical = deps
+            .api
+            .addr_canonicalize(Addr::unchecked("bob".to_string()).as_str())
+            .unwrap();
+        let entry = StoredEntry::new(&canonical).unwrap();
+        assert_eq!(entry.address().unwrap(), canonical);
+        assert_eq!(entry.balance().unwrap(), 0_u64);
+
+        let dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
+
+        // expect error if trying to spend too much
+        let entry = StoredEntry::from(&mut deps.storage, &dwb_entry, Some(1));
+        let error = extract_error_msg(entry);
+        assert!(error.contains("insufficient funds"));
+
+        let entry = StoredEntry::from(&mut deps.storage, &dwb_entry, None).unwrap();
+        assert_eq!(entry.address().unwrap(), canonical);
+        assert_eq!(entry.balance().unwrap(), 0_u64);
+    }
+
+    #[test]
+    fn test_btbe() {
+        let (init_result, mut deps) = init_helper(vec![InitialBalance {
+            address: "bob".to_string(),
+            amount: Uint128::new(5000),
+        }]);
+        assert!(
+            init_result.is_ok(),
+            "Init failed: {}",
+            init_result.err().unwrap()
+        );
+        let env = mock_env();
+        let _info = mock_info("bob", &[]);
+
+        let _ = initialize_btbe(&mut deps.storage).unwrap();
+
+        let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
+        assert_eq!(btbe_node_count, 1);
+
+        let canonical = deps
+            .api
+            .addr_canonicalize(Addr::unchecked("bob".to_string()).as_str())
+            .unwrap();
+        let entry = StoredEntry::new(&canonical).unwrap();
+        assert_eq!(entry.address().unwrap(), canonical);
+        assert_eq!(entry.balance().unwrap(), 0_u64);
+
+        let dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
+
+        let _result = merge_dwb_entry(&mut deps.storage, &dwb_entry, None, &[0u8,0u8]);
+
+        let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
+        assert_eq!(btbe_node_count, 1);
+    }
 }
