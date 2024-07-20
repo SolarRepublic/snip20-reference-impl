@@ -723,7 +723,7 @@ mod tests {
             "Init failed: {}",
             init_result.err().unwrap()
         );
-        let env = mock_env();
+        let _env = mock_env();
         let _info = mock_info("bob", &[]);
 
         let canonical = deps
@@ -757,7 +757,7 @@ mod tests {
             "Init failed: {}",
             init_result.err().unwrap()
         );
-        let env = mock_env();
+        let _env = mock_env();
         let _info = mock_info("bob", &[]);
 
         let _ = initialize_btbe(&mut deps.storage).unwrap();
