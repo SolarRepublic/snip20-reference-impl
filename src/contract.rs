@@ -12,7 +12,7 @@ use secret_toolkit::utils::{pad_handle_result, pad_query_result};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{hkdf_sha_256, sha_256, ContractPrng};
 
-use crate::batch;
+use crate::{batch, old_state,};
 
 #[cfg(feature = "gas_tracking")]
 use crate::dwb::log_dwb;
@@ -25,6 +25,7 @@ use crate::btbe::{
 use crate::gas_tracker::{GasTracker, LoggingExt};
 #[cfg(feature = "gas_evaporation")]
 use crate::msg::Evaporator;
+use crate::msg::{u8_to_status_level, MigrateMsg};
 use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, ExecuteAnswer, ExecuteMsg,
     InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
@@ -32,7 +33,7 @@ use crate::msg::{
 use crate::notifications::{multi_received_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_N, MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE};
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    safe_add, AllowancesStore, Config, MintersStore, ReceiverHashStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET, TOTAL_SUPPLY
+    safe_add, AllowancesStore, Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET, TOTAL_SUPPLY
 };
 use crate::strings::TRANSFER_HISTORY_UNSUPPORTED_MSG;
 use crate::transaction_history::{
@@ -46,35 +47,44 @@ pub const NOTIFICATION_BLOCK_SIZE: usize = 36;
 pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
 
 #[entry_point]
-pub fn instantiate(
-    deps: DepsMut,
-    env: Env,
-    info: MessageInfo,
-    msg: InstantiateMsg,
-) -> StdResult<Response> {
-    // Check name, symbol, decimals
-    if !is_valid_name(&msg.name) {
-        return Err(StdError::generic_err(
-            "Name is not in the expected format (3-30 UTF-8 bytes)",
-        ));
-    }
-    if !is_valid_symbol(&msg.symbol) {
-        return Err(StdError::generic_err(
-            "Ticker symbol is not in expected format [A-Z]{3,20}",
-        ));
-    }
-    if msg.decimals > 18 {
-        return Err(StdError::generic_err("Decimals must not exceed 18"));
-    }
+pub fn migrate(deps: DepsMut, env: Env, info: MessageInfo, _msg: MigrateMsg) -> StdResult<Response> {
+    // migrate old data
 
-    let init_config = msg.config.unwrap_or_default();
+    // :: minters
+    let minters = old_state::get_old_minters(deps.storage);
+    MintersStore::save(deps.storage, minters)?;
 
-    let admin = match msg.admin {
-        Some(admin_addr) => deps.api.addr_validate(admin_addr.as_str())?,
-        None => info.sender.clone(),
-    };
+    // :: total supply
+    let total_supply = old_state::get_old_total_supply(deps.storage);
+    TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
 
-    let mut total_supply: u128 = 0;
+    // :: contract status
+    let status = old_state::get_old_contract_status(deps.storage);
+    CONTRACT_STATUS.save(deps.storage, &u8_to_status_level(status).unwrap())?;
+
+    // :: constants
+    let constants = old_state::get_old_constants(deps.storage)?;
+    CONFIG.save(
+        deps.storage,
+        &Config {
+            name: constants.name,
+            admin: constants.admin,
+            symbol: constants.symbol,
+            decimals: constants.decimals,
+            total_supply_is_public: constants.total_supply_is_public,
+            deposit_is_enabled: true,
+            redeem_is_enabled: true,
+            mint_is_enabled: false,
+            burn_is_enabled: false,
+            contract_address: env.contract.address,
+            supported_denoms: vec!["uscrt".to_string()],
+            can_modify_denoms: false,
+        }
+    )?;
+
+    // :: do not migrate receivers
+
+    // set up dwbs
 
     // initialize the bitwise-trie of bucketed entries
     initialize_btbe(deps.storage)?;
@@ -82,12 +92,10 @@ pub fn instantiate(
     // initialize the delay write buffer
     DWB.save(deps.storage, &DelayedWriteBuffer::new()?)?;
 
-    let initial_balances = msg.initial_balances.unwrap_or_default();
-    let raw_admin = deps.api.addr_canonicalize(admin.as_str())?;
     let rng_seed = env.block.random.as_ref().unwrap();
 
     // use entropy and env.random to create an internal secret for the contract
-    let entropy = msg.prng_seed.0.as_slice();
+    let entropy = constants.prng_seed.as_slice();
     let entropy_len = 16 + info.sender.to_string().len() + entropy.len();
     let mut rng_entropy = Vec::with_capacity(entropy_len);
     rng_entropy.extend_from_slice(&env.block.height.to_be_bytes());
@@ -118,65 +126,6 @@ pub fn instantiate(
         CHANNELS.insert(deps.storage, &channel)?;
     }
 
-    let mut rng = ContractPrng::new(rng_seed.as_slice(), &sha_256(&msg.prng_seed.0));
-    for balance in initial_balances {
-        let amount = balance.amount.u128();
-        let balance_address = deps.api.addr_canonicalize(balance.address.as_str())?;
-        #[cfg(feature = "gas_tracking")]
-        let mut tracker = GasTracker::new(deps.api);
-        perform_mint(
-            deps.storage,
-            &mut rng,
-            &raw_admin,
-            &balance_address,
-            amount,
-            msg.symbol.clone(),
-            Some("Initial Balance".to_string()),
-            &env.block,
-            #[cfg(feature = "gas_tracking")]
-            &mut tracker,
-        )?;
-
-        if let Some(new_total_supply) = total_supply.checked_add(amount) {
-            total_supply = new_total_supply;
-        } else {
-            return Err(StdError::generic_err(
-                "The sum of all initial balances exceeds the maximum possible total supply",
-            ));
-        }
-    }
-
-    let supported_denoms = match msg.supported_denoms {
-        None => vec![],
-        Some(x) => x,
-    };
-
-    CONFIG.save(
-        deps.storage,
-        &Config {
-            name: msg.name,
-            symbol: msg.symbol,
-            decimals: msg.decimals,
-            admin: admin.clone(),
-            total_supply_is_public: init_config.public_total_supply(),
-            deposit_is_enabled: init_config.deposit_enabled(),
-            redeem_is_enabled: init_config.redeem_enabled(),
-            mint_is_enabled: init_config.mint_enabled(),
-            burn_is_enabled: init_config.burn_enabled(),
-            contract_address: env.contract.address,
-            supported_denoms,
-            can_modify_denoms: init_config.can_modify_denoms(),
-        },
-    )?;
-    TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
-    CONTRACT_STATUS.save(deps.storage, &ContractStatusLevel::NormalRun)?;
-    let minters = if init_config.mint_enabled() {
-        Vec::from([admin])
-    } else {
-        Vec::new()
-    };
-    MintersStore::save(deps.storage, minters)?;
-
     let vk_seed = hkdf_sha_256(
         &salt,
         rng_seed.0.as_slice(),
@@ -186,6 +135,16 @@ pub fn instantiate(
     ViewingKey::set_seed(deps.storage, &vk_seed);
 
     Ok(Response::default())
+}
+
+#[entry_point]
+pub fn instantiate(
+    _deps: DepsMut,
+    _env: Env,
+    _info: MessageInfo,
+    _msg: InstantiateMsg,
+) -> StdResult<Response> {
+    Err(StdError::generic_err("This contract can only be instantiated through `migrate` from the sscrt contract"))
 }
 
 #[entry_point]
@@ -1725,8 +1684,10 @@ fn try_add_receiver_api_callback(
         return Ok(());
     }
 
-    let receiver_hash = ReceiverHashStore::may_load(storage, &recipient)?;
+    //let receiver_hash = ReceiverHashStore::may_load(storage, &recipient)?;
+    let receiver_hash = old_state::get_receiver_hash(storage, &recipient);
     if let Some(receiver_hash) = receiver_hash {
+        let receiver_hash = receiver_hash?;
         let receiver_msg = Snip20ReceiveMsg::new(sender, from, amount, memo, msg);
         let callback_msg = receiver_msg.into_cosmos_msg(receiver_hash, recipient)?;
 
@@ -1944,7 +1905,8 @@ fn try_register_receive(
     info: MessageInfo,
     code_hash: String,
 ) -> StdResult<Response> {
-    ReceiverHashStore::save(deps.storage, &info.sender, code_hash)?;
+    //ReceiverHashStore::save(deps.storage, &info.sender, code_hash)?;
+    old_state::set_receiver_hash(deps.storage, &info.sender, code_hash);
 
     let data = to_binary(&ExecuteAnswer::RegisterReceive { status: Success })?;
     Ok(Response::new()
@@ -4110,7 +4072,7 @@ mod tests {
         assert!(ensure_success(result));
 
         let hash =
-            ReceiverHashStore::may_load(&deps.storage, &Addr::unchecked("contract".to_string()))
+            old_state::get_receiver_hash(&deps.storage, &Addr::unchecked("contract".to_string()))
                 .unwrap()
                 .unwrap();
         assert_eq!(hash, "this_is_a_hash_of_a_code".to_string());

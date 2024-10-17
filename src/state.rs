@@ -16,7 +16,7 @@ pub const KEY_TX_COUNT: &[u8] = b"tx-count";
 pub const PREFIX_BALANCES: &[u8] = b"balances";
 pub const PREFIX_ALLOWANCES: &[u8] = b"allowances";
 pub const PREFIX_ALLOWED: &[u8] = b"allowed";
-pub const PREFIX_VIEW_KEY: &[u8] = b"viewingkey";
+//pub const PREFIX_VIEW_KEY: &[u8] = b"viewingkey";
 pub const PREFIX_RECEIVERS: &[u8] = b"receivers";
 
 // Config
@@ -208,19 +208,21 @@ impl AllowancesStore {
 }
 
 // Receiver Interface
-pub static RECEIVER_HASH: Item<String> = Item::new(PREFIX_RECEIVERS);
-pub struct ReceiverHashStore {}
-impl ReceiverHashStore {
-    pub fn may_load(store: &dyn Storage, account: &Addr) -> StdResult<Option<String>> {
-        let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
-        receiver_hash.may_load(store)
-    }
 
-    pub fn save(store: &mut dyn Storage, account: &Addr, code_hash: String) -> StdResult<()> {
-        let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
-        receiver_hash.save(store, &code_hash)
-    }
-}
+// we won't use this new storage for sscrt receivers, so we don't have to migrate the data structures
+//pub static RECEIVER_HASH: Item<String> = Item::new(PREFIX_RECEIVERS);
+//pub struct ReceiverHashStore {}
+//impl ReceiverHashStore {
+//    pub fn may_load(store: &dyn Storage, account: &Addr) -> StdResult<Option<String>> {
+//        let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
+//        receiver_hash.may_load(store)
+//    }
+//
+//    pub fn save(store: &mut dyn Storage, account: &Addr, code_hash: String) -> StdResult<()> {
+//        let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
+//        receiver_hash.save(store, &code_hash)
+//    }
+//}
 
 pub static INTERNAL_SECRET: Item<Vec<u8>> = Item::new(b"internal-secret");
 

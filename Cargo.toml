@@ -51,5 +51,9 @@ constant_time_eq = "0.3.0"
 primitive-types = { version = "0.12.2", default-features = false }
 minicbor-ser = "0.2.0"
 
+# from sscrt 
+bincode2 = "2.0.1"
+# old-secret-toolkit = { package = "secret-toolkit", git = "https://github.com/enigmampc/secret-toolkit", rev = "6aa670f" }
+
 [dev-dependencies]
 cosmwasm-schema = { version = "1.1.8" }

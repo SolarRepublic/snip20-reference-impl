@@ -9,6 +9,10 @@ use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Uint64,};
 use cosmwasm_std::Uint64;
 use secret_toolkit::{notification::ChannelInfoData, permit::Permit};
 
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct MigrateMsg {
+}
+
 #[cfg_attr(test, derive(Eq, PartialEq))]
 #[derive(Serialize, Deserialize, Clone, JsonSchema)]
 pub struct InitialBalance {

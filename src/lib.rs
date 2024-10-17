@@ -12,3 +12,6 @@ pub mod state;
 mod strings;
 mod transaction_history;
 mod notifications;
+
+mod old_state;
+mod old_append_store;

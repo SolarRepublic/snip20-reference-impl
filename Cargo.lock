@@ -919,6 +919,7 @@ name = "snip20-reference-impl"
 version = "2.0.0"
 dependencies = [
  "base64 0.21.7",
+ "bincode2",
  "constant_time_eq",
  "cosmwasm-schema",
  "minicbor-ser",
