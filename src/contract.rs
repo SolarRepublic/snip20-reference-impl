@@ -425,7 +425,22 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             channels,
             txhash,
             deps.api.addr_canonicalize(account.as_str())?,
-        )
+        ),
+        QueryWithPermit::LegacyTransferHistory { page, page_size } => {
+            if !permit.check_permission(&TokenPermissions::History) {
+                return Err(StdError::generic_err(format!(
+                    "No permission to query history, got permissions {:?}",
+                    permit.params.permissions
+                )));
+            }
+
+            query_legacy_transfer_history(
+                deps,
+                &Addr::unchecked(account), 
+                page.unwrap_or(0), 
+                page_size
+            )
+        }
     }
 }
 
@@ -471,6 +486,12 @@ pub fn viewing_keys_queries(deps: Deps, env: Env,  msg: QueryMsg) -> StdResult<B
                     txhash,
                     deps.api.addr_canonicalize(viewer.address.as_str())?,
                 ),
+                QueryMsg::LegacyTransferHistory { 
+                    address, 
+                    page, 
+                    page_size,
+                    ..
+                } => query_legacy_transfer_history(deps, &address, page.unwrap_or(0), page_size),
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -693,6 +714,19 @@ pub fn query_transactions(
         txs,
         total: Some(total as u64),
     };
+    to_binary(&result)
+}
+
+pub fn query_legacy_transfer_history(
+    deps: Deps,
+    account: &Addr,
+    page: u32,
+    page_size: u32,
+) -> StdResult<Binary> {
+    let address = deps.api.addr_canonicalize(account.as_str()).unwrap();
+    let txs = old_state::get_old_transfers(deps.api, deps.storage, &address, page, page_size)?;
+
+    let result = QueryAnswer::LegacyTransferHistory { txs };
     to_binary(&result)
 }
 

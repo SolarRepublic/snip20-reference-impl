@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{batch, transaction_history::Tx};
+use crate::{batch, old_state, transaction_history::Tx};
 use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Uint64,};
 #[cfg(feature = "gas_evaporation")]
 use cosmwasm_std::Uint64;
@@ -507,6 +507,14 @@ pub enum QueryMsg {
         viewer: ViewerInfo,
     },
 
+    // Pre-DWB history
+    LegacyTransferHistory {
+        address: Addr,
+        key: String,
+        page: Option<u32>,
+        page_size: u32,
+    },
+
     WithPermit {
         permit: Permit,
         query: QueryWithPermit,
@@ -564,6 +572,10 @@ impl QueryMsg {
                 let address = api.addr_validate(viewer.address.as_str())?;
                 Ok((vec![address], viewer.viewing_key.clone()))
             }
+            Self::LegacyTransferHistory { address, key, .. } => {
+                let address = api.addr_validate(address.as_str())?;
+                Ok((vec![address], key.clone()))
+            }
             _ => panic!("This query type does not require authentication"),
         }
     }
@@ -600,6 +612,11 @@ pub enum QueryWithPermit {
     ChannelInfo {
         channels: Vec<String>,
         txhash: Option<String>,
+    },
+    // Pre-DWB history
+    LegacyTransferHistory {
+        page: Option<u32>,
+        page_size: u32,
     },
 }
 
@@ -667,6 +684,11 @@ pub enum QueryAnswer {
         /// shared secret in base64
         seed: Binary,
         channels: Vec<ChannelInfoData>,
+    },
+
+    // Pre-DWB history
+    LegacyTransferHistory {
+        txs: Vec<old_state::Tx>,
     },
 
     #[cfg(feature = "gas_tracking")]
