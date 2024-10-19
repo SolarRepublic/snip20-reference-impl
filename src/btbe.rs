@@ -489,11 +489,11 @@ pub fn stored_entry(
 }
 
 /// returns the current stored balance for an entry
-pub fn stored_balance(storage: &dyn Storage, address: &CanonicalAddr) -> StdResult<u128> {
+pub fn stored_balance(storage: &dyn Storage, address: &CanonicalAddr) -> StdResult<Option<u128>> {
     if let Some(entry) = stored_entry(storage, address)? {
-        Ok(entry.balance()? as u128)
+        Ok(Some(entry.balance()? as u128))
     } else {
-        Ok(0_u128)
+        Ok(None)
     }
 }
 

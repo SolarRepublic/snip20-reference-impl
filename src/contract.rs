@@ -47,7 +47,7 @@ pub const NOTIFICATION_BLOCK_SIZE: usize = 36;
 pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
 
 #[entry_point]
-pub fn migrate(deps: DepsMut, env: Env, info: MessageInfo, _msg: MigrateMsg) -> StdResult<Response> {
+pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> StdResult<Response> {
     // migrate old data
 
     // :: minters
@@ -96,11 +96,10 @@ pub fn migrate(deps: DepsMut, env: Env, info: MessageInfo, _msg: MigrateMsg) -> 
 
     // use entropy and env.random to create an internal secret for the contract
     let entropy = constants.prng_seed.as_slice();
-    let entropy_len = 16 + info.sender.to_string().len() + entropy.len();
+    let entropy_len = 16 + entropy.len();
     let mut rng_entropy = Vec::with_capacity(entropy_len);
     rng_entropy.extend_from_slice(&env.block.height.to_be_bytes());
     rng_entropy.extend_from_slice(&env.block.time.seconds().to_be_bytes());
-    rng_entropy.extend_from_slice(info.sender.as_bytes());
     rng_entropy.extend_from_slice(entropy);
 
     // Create INTERNAL_SECRET
@@ -738,7 +737,7 @@ pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
     let account = Addr::unchecked(account);
     let account = deps.api.addr_canonicalize(account.as_str())?;
 
-    let mut amount = stored_balance(deps.storage, &account)?;
+    let mut amount = stored_balance(deps.storage, &account)?.unwrap_or_default();
     let dwb = DWB.load(deps.storage)?;
     let dwb_index = dwb.recipient_match(&account);
     if dwb_index > 0 {
@@ -3300,10 +3299,10 @@ mod tests {
 
         assert_eq!(
             5000 - 1000,
-            stored_balance(&deps.storage, &bob_addr).unwrap()
+            stored_balance(&deps.storage, &bob_addr).unwrap().unwrap_or_default()
         );
         // alice has not been settled yet
-        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr).unwrap().unwrap_or_default());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         println!("DWB: {dwb:?}");
@@ -3342,12 +3341,12 @@ mod tests {
 
         assert_eq!(
             5000 - 1000 - 100,
-            stored_balance(&deps.storage, &bob_addr).unwrap()
+            stored_balance(&deps.storage, &bob_addr).unwrap().unwrap_or_default()
         );
         // alice has not been settled yet
-        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_ne!(1000, stored_balance(&deps.storage, &alice_addr).unwrap().unwrap_or_default());
         // charlie has not been settled yet
-        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr).unwrap());
+        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr).unwrap().unwrap_or_default());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -3381,10 +3380,10 @@ mod tests {
 
         assert_eq!(
             5000 - 1000 - 100 - 500,
-            stored_balance(&deps.storage, &bob_addr).unwrap()
+            stored_balance(&deps.storage, &bob_addr).unwrap().unwrap_or_default()
         );
         // make sure alice has not been settled yet
-        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr).unwrap().unwrap_or_default());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -3465,14 +3464,14 @@ mod tests {
 
         assert_eq!(
             5000 - 1000 - 100 - 500 - 200,
-            stored_balance(&deps.storage, &bob_addr).unwrap()
+            stored_balance(&deps.storage, &bob_addr).unwrap().unwrap_or_default()
         );
         // alice has not been settled yet
-        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_ne!(1500, stored_balance(&deps.storage, &alice_addr).unwrap().unwrap_or_default());
         // charlie has not been settled yet
-        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr).unwrap());
+        assert_ne!(100, stored_balance(&deps.storage, &charlie_addr).unwrap().unwrap_or_default());
         // ernie has not been settled yet
-        assert_ne!(200, stored_balance(&deps.storage, &ernie_addr).unwrap());
+        assert_ne!(200, stored_balance(&deps.storage, &ernie_addr).unwrap().unwrap_or_default());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -3513,10 +3512,10 @@ mod tests {
         // alice has been settled
         assert_eq!(
             1500 - 50,
-            stored_balance(&deps.storage, &alice_addr).unwrap()
+            stored_balance(&deps.storage, &alice_addr).unwrap().unwrap_or_default()
         );
         // dora has not been settled
-        assert_ne!(50, stored_balance(&deps.storage, &dora_addr).unwrap());
+        assert_ne!(50, stored_balance(&deps.storage, &dora_addr).unwrap().unwrap_or_default());
 
         let dwb = DWB.load(&deps.storage).unwrap();
         //println!("DWB: {dwb:?}");
@@ -3554,7 +3553,7 @@ mod tests {
         }
         assert_eq!(
             5000 - 1000 - 100 - 500 - 200 - 59,
-            stored_balance(&deps.storage, &bob_addr).unwrap()
+            stored_balance(&deps.storage, &bob_addr).unwrap().unwrap_or_default()
         );
 
         let dwb = DWB.load(&deps.storage).unwrap();
@@ -3583,7 +3582,7 @@ mod tests {
 
         assert_eq!(
             5000 - 1000 - 100 - 500 - 200 - 59 - 1,
-            stored_balance(&deps.storage, &bob_addr).unwrap()
+            stored_balance(&deps.storage, &bob_addr).unwrap().unwrap_or_default()
         );
 
         //let dwb = DWB.load(&deps.storage).unwrap();
@@ -3609,7 +3608,7 @@ mod tests {
 
         assert_eq!(
             5000 - 1000 - 100 - 500 - 200 - 59 - 1 - 1,
-            stored_balance(&deps.storage, &bob_addr).unwrap()
+            stored_balance(&deps.storage, &bob_addr).unwrap().unwrap_or_default()
         );
 
         //let dwb = DWB.load(&deps.storage).unwrap();
@@ -3638,7 +3637,7 @@ mod tests {
             // alice should not settle
             assert_eq!(
                 1500 - 50,
-                stored_balance(&deps.storage, &alice_addr).unwrap()
+                stored_balance(&deps.storage, &alice_addr).unwrap().unwrap_or_default()
             );
         }
 
@@ -3660,7 +3659,7 @@ mod tests {
         let result = handle_result.unwrap();
         assert!(ensure_success(result));
 
-        assert_eq!(2724, stored_balance(&deps.storage, &alice_addr).unwrap());
+        assert_eq!(2724, stored_balance(&deps.storage, &alice_addr).unwrap().unwrap_or_default());
 
         // now we send 50 more transactions to alice from bob
         for i in 1..=50 {
@@ -3683,7 +3682,7 @@ mod tests {
             assert!(ensure_success(result));
 
             // alice should not settle
-            assert_eq!(2724, stored_balance(&deps.storage, &alice_addr).unwrap());
+            assert_eq!(2724, stored_balance(&deps.storage, &alice_addr).unwrap().unwrap_or_default());
         }
 
         let handle_msg = ExecuteMsg::SetViewingKey {
@@ -4542,8 +4541,8 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("alice".to_string()).as_str())
             .unwrap();
 
-        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap();
-        let alice_balance = stored_balance(&deps.storage, &alice_canonical).unwrap();
+        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap().unwrap_or_default();
+        let alice_balance = stored_balance(&deps.storage, &alice_canonical).unwrap().unwrap_or_default();
         assert_eq!(bob_balance, 5000 - 2000);
         assert_ne!(alice_balance, 2000);
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -4697,8 +4696,8 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("contract".to_string()).as_str())
             .unwrap();
 
-        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap();
-        let contract_balance = stored_balance(&deps.storage, &contract_canonical).unwrap();
+        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap().unwrap_or_default();
+        let contract_balance = stored_balance(&deps.storage, &contract_canonical).unwrap().unwrap_or_default();
         assert_eq!(bob_balance, 5000 - 2000);
         assert_ne!(contract_balance, 2000);
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -4841,7 +4840,7 @@ mod tests {
             .addr_canonicalize(Addr::unchecked("bob".to_string()).as_str())
             .unwrap();
 
-        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap();
+        let bob_balance = stored_balance(&deps.storage, &bob_canonical).unwrap().unwrap_or_default();
         assert_eq!(bob_balance, 10000 - 2000);
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
         assert_eq!(total_supply, 10000 - 2000);
@@ -5000,7 +4999,7 @@ mod tests {
                 .api
                 .addr_canonicalize(Addr::unchecked(name.to_string()).as_str())
                 .unwrap();
-            let balance = stored_balance(&deps.storage, &name_canon).unwrap();
+            let balance = stored_balance(&deps.storage, &name_canon).unwrap().unwrap_or_default();
             assert_eq!(balance, 10000 - amount);
         }
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -5036,7 +5035,7 @@ mod tests {
                 .api
                 .addr_canonicalize(Addr::unchecked(name.to_string()).as_str())
                 .unwrap();
-            let balance = stored_balance(&deps.storage, &name_canon).unwrap();
+            let balance = stored_balance(&deps.storage, &name_canon).unwrap().unwrap_or_default();
             assert_eq!(balance, 10000 - allowance_size);
         }
         let total_supply = TOTAL_SUPPLY.load(&deps.storage).unwrap();
@@ -5410,7 +5409,7 @@ mod tests {
             .api
             .addr_canonicalize(Addr::unchecked("butler".to_string()).as_str())
             .unwrap();
-        assert_eq!(stored_balance(&deps.storage, &canonical).unwrap(), 3000)
+        assert_eq!(stored_balance(&deps.storage, &canonical).unwrap().unwrap_or_default(), 3000)
     }
 
     #[test]
@@ -5487,7 +5486,7 @@ mod tests {
             .unwrap();
 
         // stored balance not updated, still in dwb
-        assert_ne!(stored_balance(&deps.storage, &canonical).unwrap(), 6000);
+        assert_ne!(stored_balance(&deps.storage, &canonical).unwrap().unwrap_or_default(), 6000);
 
         let create_vk_msg = ExecuteMsg::CreateViewingKey {
             entropy: Some("34".to_string()),

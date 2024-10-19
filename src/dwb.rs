@@ -139,7 +139,7 @@ impl DelayedWriteBuffer {
         address: &CanonicalAddr,
     ) -> StdResult<(u128, DelayedWriteBufferEntry)> {
         // get the address' stored balance
-        let mut balance = stored_balance(store, address)?;
+        let mut balance = stored_balance(store, address)?.unwrap_or_default();
 
         // locate the position of the entry in the buffer
         let matched_entry_idx = self.recipient_match(address);

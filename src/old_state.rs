@@ -185,6 +185,13 @@ pub fn get_old_balance(storage: &dyn Storage, account: &CanonicalAddr) -> u128 {
 	}
 }
 
+pub fn clear_old_balance(storage: &mut dyn Storage, account: &CanonicalAddr) {
+	let mut balances_store = PrefixedStorage::new(storage, PREFIX_BALANCES);
+	balances_store.set(account.as_slice(), &0u128.to_be_bytes())
+}
+
+
+
 // Viewing Keys
 
 pub fn read_viewing_key(store: &dyn Storage, owner: &CanonicalAddr) -> Option<Vec<u8>> {
