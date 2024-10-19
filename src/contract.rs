@@ -737,13 +737,23 @@ pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
     let account = Addr::unchecked(account);
     let account = deps.api.addr_canonicalize(account.as_str())?;
 
-    let mut amount = stored_balance(deps.storage, &account)?.unwrap_or_default();
+    let amount = stored_balance(deps.storage, &account)?;
+    let mut balance;
+    
     let dwb = DWB.load(deps.storage)?;
     let dwb_index = dwb.recipient_match(&account);
-    if dwb_index > 0 {
-        amount = amount.saturating_add(dwb.entries[dwb_index].amount()? as u128);
+
+    if amount.is_none() && dwb_index == 0 {
+        // no record of balance in dwb or btbe
+        balance = old_state::get_old_balance(deps.storage, &account);
+    } else {
+        balance = amount.unwrap_or_default();
+        if dwb_index > 0 {
+            balance = balance.saturating_add(dwb.entries[dwb_index].amount()? as u128);
+        }
     }
-    let amount = Uint128::new(amount);
+
+    let amount = Uint128::new(balance);
     let response = QueryAnswer::Balance { amount };
     to_binary(&response)
 }
