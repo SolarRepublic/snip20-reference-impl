@@ -145,7 +145,7 @@ impl DelayedWriteBuffer {
         let opt_balance = stored_balance(store, address)?;
 
         //
-        // :: migration start
+        // :: added for migration 
         //
         let mut balance;
 
@@ -155,7 +155,7 @@ impl DelayedWriteBuffer {
             balance = old_state::get_old_balance(store, address);
         }
         //
-        // :: migration end
+        // :: migration code end
         //
 
         // locate the position of the entry in the buffer
