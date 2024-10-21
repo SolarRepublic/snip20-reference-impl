@@ -19,7 +19,7 @@ use crate::dwb::log_dwb;
 use crate::dwb::{DelayedWriteBuffer, DWB, TX_NODES};
 
 use crate::btbe::{
-    find_start_bundle, initialize_btbe, stored_balance, stored_entry, stored_tx_count,
+    find_start_bundle, initialize_btbe, merge_dwb_entry, stored_balance, stored_entry, stored_tx_count
 };
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::{GasTracker, LoggingExt};
@@ -30,15 +30,18 @@ use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, ExecuteAnswer, ExecuteMsg,
     InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
 };
-use crate::notifications::{multi_received_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_N, MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE};
+use crate::notifications::{
+    multi_received_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, 
+    MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_N, MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, 
+    MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE
+};
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
     safe_add, AllowancesStore, Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET, TOTAL_SUPPLY
 };
 use crate::strings::TRANSFER_HISTORY_UNSUPPORTED_MSG;
 use crate::transaction_history::{
-    store_burn_action, store_deposit_action, store_mint_action, store_redeem_action,
-    store_transfer_action, Tx,
+    store_burn_action, store_deposit_action, store_mint_action, store_redeem_action, store_transfer_action, Tx
 };
 
 /// We make sure that responses from `handle` are padded to a multiple of this size.
@@ -288,7 +291,8 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         ExecuteMsg::AddSupportedDenoms { denoms, .. } => add_supported_denoms(deps, info, denoms),
         ExecuteMsg::RemoveSupportedDenoms { denoms, .. } => {
             remove_supported_denoms(deps, info, denoms)
-        }
+        },
+        ExecuteMsg::MigrateLegacyAccount { .. } => migrate_legacy_account(deps, env, info),
     };
 
     let padded_result = pad_handle_result(response, RESPONSE_BLOCK_SIZE);
@@ -298,6 +302,55 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
 
     padded_result
 }
+
+// :: migration start
+fn migrate_legacy_account(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo
+) -> StdResult<Response> {
+    let sender_raw = deps.api.addr_canonicalize(info.sender.as_str())?;
+    // get the address' stored balance
+    let opt_balance = stored_balance(deps.storage, &sender_raw)?;
+
+    let old_balance;
+
+    if opt_balance.is_some() { // check if entry is in btbe
+        return Err(StdError::generic_err("Account already migrated"));
+    } else {
+        old_balance = old_state::get_old_balance(deps.storage, &sender_raw);
+    }
+
+    if old_balance == 0 {
+        return Err(StdError::generic_err("No legacy balance"));
+    }
+
+    // they might have already been a recipient so let's settle them as if they were a sender/owner in a transfer
+
+    // load delayed write buffer
+    let mut dwb = DWB.load(deps.storage)?;
+
+    // release the address from the buffer
+    let (_dwb_balance, mut dwb_entry) = dwb.release_dwb_recipient(deps.storage, &sender_raw)?;
+    dwb_entry.set_recipient(&sender_raw)?;
+    
+    #[cfg(feature = "gas_tracking")]
+    let mut tracker: GasTracker = GasTracker::new(deps.api);
+
+    merge_dwb_entry(
+        deps.storage,
+        &mut dwb_entry,
+        None,
+        #[cfg(feature = "gas_tracking")]
+        tracker,
+        &env.block,
+    )?;    
+
+    Ok(Response::new()
+        .set_data(to_binary(&ExecuteAnswer::MigrateLegacyAccount { status: Success })?)
+    )
+}
+// :: migration end
 
 #[entry_point]
 pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
@@ -716,6 +769,7 @@ pub fn query_transactions(
     to_binary(&result)
 }
 
+// :: migration start
 pub fn query_legacy_transfer_history(
     deps: Deps,
     account: &Addr,
@@ -728,6 +782,7 @@ pub fn query_legacy_transfer_history(
     let result = QueryAnswer::LegacyTransferHistory { txs };
     to_binary(&result)
 }
+// :: migration end
 
 pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
     // Notice that if query_balance() was called by a viewing key call, the address of 'account'
@@ -1460,6 +1515,7 @@ fn try_redeem(
         "redeem",
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
+        &env.block,
     )?;
 
     DWB.save(deps.storage, &dwb)?;
@@ -2390,6 +2446,7 @@ fn try_burn_from(
         "burn",
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
+        &env.block,
     )?;
     if raw_burner != raw_owner {
         // also settle sender's account
@@ -2401,6 +2458,7 @@ fn try_burn_from(
             "burn",
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
+            &env.block,
         )?;
     }
 
@@ -2490,6 +2548,7 @@ fn try_batch_burn_from(
             "burn",
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
+            &env.block,
         )?;
         if raw_spender != raw_owner {
             dwb.settle_sender_or_owner_account(
@@ -2500,6 +2559,7 @@ fn try_batch_burn_from(
                 "burn",
                 #[cfg(feature = "gas_tracking")]
                 &mut tracker,
+                &env.block,
             )?;
         }
 
@@ -2781,6 +2841,7 @@ fn try_burn(
         "burn",
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
+        &env.block,
     )?;
 
     DWB.save(deps.storage, &dwb)?;
@@ -2854,6 +2915,7 @@ fn perform_transfer(
         transfer_str,
         #[cfg(feature = "gas_tracking")]
         tracker,
+        block,
     )?;
 
     // if this is a *_from action, settle the sender's account, too
@@ -2866,6 +2928,7 @@ fn perform_transfer(
             transfer_str,
             #[cfg(feature = "gas_tracking")]
             tracker,
+            block,
         )?;
     }
 
@@ -2878,6 +2941,7 @@ fn perform_transfer(
         amount,
         #[cfg(feature = "gas_tracking")]
         tracker,
+        block,
     )?;
 
     #[cfg(feature = "gas_tracking")]
@@ -2918,6 +2982,7 @@ fn perform_mint(
             "mint",
             #[cfg(feature = "gas_tracking")]
             tracker,
+            block,
         )?;
     }
 
@@ -2930,6 +2995,7 @@ fn perform_mint(
         amount,
         #[cfg(feature = "gas_tracking")]
         tracker,
+        block,
     )?;
 
     DWB.save(store, &dwb)?;
@@ -2961,6 +3027,7 @@ fn perform_deposit(
         amount,
         #[cfg(feature = "gas_tracking")]
         tracker,
+        block,
     )?;
 
     DWB.save(store, &dwb)?;
@@ -3000,15 +3067,6 @@ fn is_valid_symbol(symbol: &str) -> bool {
 
     len_is_valid && symbol.bytes().all(|byte| byte.is_ascii_alphabetic())
 }
-
-// pub fn migrate(
-//     _deps: DepsMut,
-//     _env: Env,
-//     _msg: MigrateMsg,
-// ) -> StdResult<MigrateResponse> {
-//     Ok(MigrateResponse::default())
-//     Ok(MigrateResponse::default())
-// }
 
 #[cfg(test)]
 mod tests {

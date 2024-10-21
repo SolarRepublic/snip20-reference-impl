@@ -1,5 +1,5 @@
 use constant_time_eq::constant_time_eq;
-use cosmwasm_std::{Api, CanonicalAddr, StdError, StdResult, Storage};
+use cosmwasm_std::{Api, BlockInfo, CanonicalAddr, StdError, StdResult, Storage, Timestamp};
 use rand::RngCore;
 use secret_toolkit::storage::Item;
 use secret_toolkit_crypto::ContractPrng;
@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
 use crate::btbe::{merge_dwb_entry, stored_balance};
-use crate::state::{safe_add, safe_add_u64};
-use crate::transaction_history::{Tx, TRANSACTIONS};
+use crate::old_state;
+use crate::state::{safe_add, safe_add_u64, CONFIG};
+use crate::transaction_history::{store_migration_action, Tx, TRANSACTIONS};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
 #[cfg(feature = "gas_tracking")]
@@ -88,6 +89,7 @@ impl DelayedWriteBuffer {
         amount_spent: u128,
         op_name: &str,
         #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
+        block: &BlockInfo, // added for migration
     ) -> StdResult<u128> {
         #[cfg(feature = "gas_tracking")]
         let mut group1 = tracker.group("settle_sender_or_owner_account.1");
@@ -110,8 +112,8 @@ impl DelayedWriteBuffer {
         #[cfg(feature = "gas_tracking")]
         group1.log("add_tx_node");
 
-        let mut entry = dwb_entry.clone();
-        entry.set_recipient(address)?;
+        //let mut entry = dwb_entry.clone();
+        dwb_entry.set_recipient(address)?;
 
         #[cfg(feature = "gas_tracking")]
         group1.logf(format!(
@@ -122,10 +124,11 @@ impl DelayedWriteBuffer {
 
         merge_dwb_entry(
             store,
-            &entry,
+            &mut dwb_entry,
             Some(amount_spent),
             #[cfg(feature = "gas_tracking")]
             tracker,
+            block,
         )?;
 
         Ok(checked_balance.unwrap())
@@ -133,13 +136,27 @@ impl DelayedWriteBuffer {
 
     /// "releases" a given recipient from the buffer, removing their entry if one exists
     /// returns the new balance and the buffer entry
-    fn release_dwb_recipient(
+    pub fn release_dwb_recipient(
         &mut self,
         store: &mut dyn Storage,
         address: &CanonicalAddr,
     ) -> StdResult<(u128, DelayedWriteBufferEntry)> {
         // get the address' stored balance
-        let mut balance = stored_balance(store, address)?.unwrap_or_default();
+        let opt_balance = stored_balance(store, address)?;
+
+        //
+        // :: migration start
+        //
+        let mut balance;
+
+        if opt_balance.is_some() { // check if entry is in btbe
+            balance = opt_balance.unwrap();
+        } else {
+            balance = old_state::get_old_balance(store, address);
+        }
+        //
+        // :: migration end
+        //
 
         // locate the position of the entry in the buffer
         let matched_entry_idx = self.recipient_match(address);
@@ -179,6 +196,7 @@ impl DelayedWriteBuffer {
         tx_id: u64,
         amount: u128,
         #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker<'a>,
+        block: &BlockInfo, // added for migration
     ) -> StdResult<()> {
         #[cfg(feature = "gas_tracking")]
         let mut group1 = tracker.group("add_recipient.1");
@@ -266,13 +284,15 @@ impl DelayedWriteBuffer {
         group1.logf(format!("@write_index: {}", write_index));
 
         // settle the entry
-        let dwb_entry = self.entries[actual_settle_index];
+        let mut dwb_entry = self.entries[actual_settle_index];
+    
         merge_dwb_entry(
             store,
-            &dwb_entry,
+            &mut dwb_entry,
             None,
             #[cfg(feature = "gas_tracking")]
             tracker,
+            block,
         )?;
 
         #[cfg(feature = "gas_tracking")]
@@ -361,7 +381,7 @@ impl DelayedWriteBufferEntry {
         Ok(result)
     }
 
-    fn set_recipient(&mut self, val: &CanonicalAddr) -> StdResult<()> {
+    pub fn set_recipient(&mut self, val: &CanonicalAddr) -> StdResult<()> {
         let val_slice = val.as_slice();
         if val_slice.len() != DWB_RECIPIENT_BYTES {
             return Err(StdError::generic_err("Set dwb recipient error"));
@@ -380,7 +400,7 @@ impl DelayedWriteBufferEntry {
         Ok(u64::from_be_bytes(result))
     }
 
-    fn set_amount(&mut self, val: u64) -> StdResult<()> {
+    pub fn set_amount(&mut self, val: u64) -> StdResult<()> {
         let start = DWB_RECIPIENT_BYTES;
         let end = start + DWB_AMOUNT_BYTES;
         self.0[start..end].copy_from_slice(&val.to_be_bytes());
@@ -426,7 +446,7 @@ impl DelayedWriteBufferEntry {
 
     /// adds a tx node to the linked list
     /// returns: the new head node
-    fn add_tx_node(&mut self, store: &mut dyn Storage, tx_id: u64) -> StdResult<u64> {
+    pub fn add_tx_node(&mut self, store: &mut dyn Storage, tx_id: u64) -> StdResult<u64> {
         let tx_node = TxNode {
             tx_id,
             next: self.head_node()?,

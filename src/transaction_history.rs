@@ -29,6 +29,8 @@ pub enum TxAction {
     },
     Deposit {},
     Redeem {},
+    // :: migration event
+    Migration {},
 }
 
 // Note that id is a globally incrementing counter.
@@ -80,6 +82,7 @@ enum TxCode {
     Burn = 2,
     Deposit = 3,
     Redeem = 4,
+    Migration = 99,
 }
 
 impl TxCode {
@@ -95,6 +98,7 @@ impl TxCode {
             2 => Ok(Burn),
             3 => Ok(Deposit),
             4 => Ok(Redeem),
+            99 => Ok(Migration),
             other => Err(StdError::generic_err(format!(
                 "Unexpected Tx code in transaction history: {} Storage is corrupted.",
                 other
@@ -153,6 +157,14 @@ impl StoredTxAction {
             address3: None,
         }
     }
+    pub fn migration() -> Self {
+        Self {
+            tx_type: TxCode::Migration.to_u8(),
+            address1: None,
+            address2: None,
+            address3: None,
+        }
+    }
 
     pub fn into_tx_action(self, api: &dyn Api) -> StdResult<TxAction> {
         let transfer_addr_err = || {
@@ -197,6 +209,7 @@ impl StoredTxAction {
             }
             TxCode::Deposit => TxAction::Deposit {},
             TxCode::Redeem => TxAction::Redeem {},
+            TxCode::Migration => TxAction::Migration {},
         };
 
         Ok(action)
@@ -210,11 +223,11 @@ pub static TRANSACTIONS: Item<StoredTx> = Item::new(PREFIX_TXS);
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub struct StoredTx {
-    action: StoredTxAction,
-    coins: StoredCoin,
-    memo: Option<String>,
-    block_time: u64,
-    block_height: u64,
+    pub action: StoredTxAction,
+    pub coins: StoredCoin,
+    pub memo: Option<String>,
+    pub block_time: u64,
+    pub block_height: u64,
 }
 
 impl StoredTx {
@@ -317,5 +330,15 @@ pub fn store_redeem_action(
     block: &cosmwasm_std::BlockInfo,
 ) -> StdResult<u64> {
     let action = StoredTxAction::redeem();
+    append_new_stored_tx(store, &action, amount, denom, None, block)
+}
+
+pub fn store_migration_action(
+    store: &mut dyn Storage,
+    amount: u128,
+    denom: String,
+    block: &cosmwasm_std::BlockInfo,
+) -> StdResult<u64> {
+    let action = StoredTxAction::migration();
     append_new_stored_tx(store, &action, amount, denom, None, block)
 }

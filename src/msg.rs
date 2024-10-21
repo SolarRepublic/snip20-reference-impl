@@ -295,6 +295,13 @@ pub enum ExecuteMsg {
         gas_target: Option<Uint64>,
         padding: Option<String>,
     },
+
+    // Migration
+    MigrateLegacyAccount {
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+        padding: Option<String>,
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
@@ -397,6 +404,11 @@ pub enum ExecuteAnswer {
 
     // Permit
     RevokePermit {
+        status: ResponseStatus,
+    },
+
+    // Migrate
+    MigrateLegacyAccount {
         status: ResponseStatus,
     },
 }

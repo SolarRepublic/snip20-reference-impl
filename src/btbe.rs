@@ -3,7 +3,7 @@
 include!(concat!(env!("OUT_DIR"), "/config.rs"));
 
 use constant_time_eq::constant_time_eq;
-use cosmwasm_std::{CanonicalAddr, StdError, StdResult, Storage};
+use cosmwasm_std::{BlockInfo, CanonicalAddr, StdError, StdResult, Storage, Timestamp};
 use primitive_types::U256;
 use secret_toolkit::{
     serialization::{Bincode2, Serde},
@@ -13,7 +13,7 @@ use secret_toolkit_crypto::hkdf_sha_256;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::state::{safe_add_u64, INTERNAL_SECRET};
+use crate::{dwb::TX_NODES, old_state::{self, clear_old_balance}, state::{safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
 use crate::dwb::{amount_u64, DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
@@ -514,9 +514,10 @@ pub fn stored_tx_count(storage: &dyn Storage, entry: &Option<StoredEntry>) -> St
 // `amount_spent` is any required subtraction due to being sender of tx
 pub fn merge_dwb_entry(
     storage: &mut dyn Storage,
-    dwb_entry: &DelayedWriteBufferEntry,
+    dwb_entry: &mut DelayedWriteBufferEntry,
     amount_spent: Option<u128>,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
+    block: &BlockInfo, // added for migration
 ) -> StdResult<()> {
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("#merge_dwb_entry.1");
@@ -550,6 +551,31 @@ pub fn merge_dwb_entry(
         // save updated bucket to storage
         node.set_and_save_bucket(storage, bucket)?;
     } else {
+        // :: migration start
+        let old_balance = old_state::get_old_balance(storage, &dwb_entry.recipient()?);
+
+        if old_balance > 0 {
+            // get the denom. we could pass this as a parameter since we've already read it from storagae earlier, 
+            // but this is simpler to implement for an uncommon operation
+            let denom = CONFIG.load(storage)?.symbol;
+            // add migration to tx history
+            let migration_tx_id = store_migration_action(
+                storage, 
+                old_balance, 
+                denom, 
+                block
+            )?;
+            // add migration tx id to the dwb_entry before the incoming tx
+            dwb_entry.add_tx_node(storage, migration_tx_id)?;
+            // add in the old balance to the dwb_entry amount
+            let mut amount = dwb_entry.amount()?;
+            safe_add_u64(&mut amount, old_balance as u64);
+            dwb_entry.set_amount(amount)?;
+            // clear the old balance, so migration only happens once
+            clear_old_balance(storage, &dwb_entry.recipient()?);
+        }
+        // :: migration end
+
         // need to insert new entry
         // create new stored balance entry
         let btbe_entry = StoredEntry::from(storage, &dwb_entry, amount_spent)?;
@@ -700,6 +726,31 @@ pub fn initialize_btbe(storage: &mut dyn Storage) -> StdResult<()> {
     Ok(())
 }
 
+// :: migration helper function
+fn prepare_migration_tx_id(store: &mut dyn Storage, current_tx_id: u64, amount: u128) -> StdResult<u64> {
+    // get the full tx we are working on to access block info
+    let stored_incoming_tx = TRANSACTIONS
+        .add_suffix(&current_tx_id.to_be_bytes())
+        .load(store)?;
+    // get the denom. we could pass this as a parameter since we've already read 
+    // it from storagae earlier, but this is simpler to implement for an uncommon operation
+    let denom = CONFIG.load(store)?.symbol;
+
+    // add migration to tx history
+    store_migration_action(
+        store, 
+        amount, 
+        denom, 
+        &BlockInfo { 
+            height: stored_incoming_tx.block_height, 
+            time: Timestamp::from_seconds(stored_incoming_tx.block_time), 
+            chain_id: "ignored".to_string(), 
+            random: None 
+        }
+    )
+}
+// :: migration
+
 #[cfg(test)]
 mod tests {
     use std::any::Any;
@@ -799,7 +850,7 @@ mod tests {
             "Init failed: {}",
             init_result.err().unwrap()
         );
-        let _env = mock_env();
+        let env = mock_env();
         let _info = mock_info("bob", &[]);
 
         let _ = initialize_btbe(&mut deps.storage).unwrap();
@@ -816,9 +867,9 @@ mod tests {
             assert_eq!(entry.address().unwrap(), canonical);
             assert_eq!(entry.balance().unwrap(), 0_u64);
 
-            let dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
+            let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-            let _result = merge_dwb_entry(&mut deps.storage, &dwb_entry, None);
+            let _result = merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
 
             let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
             assert_eq!(btbe_node_count, 1);
@@ -845,9 +896,9 @@ mod tests {
         assert_eq!(entry.address().unwrap(), canonical);
         assert_eq!(entry.balance().unwrap(), 0_u64);
 
-        let dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
+        let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-        let _result = merge_dwb_entry(&mut deps.storage, &dwb_entry, None);
+        let _result = merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
 
         let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
         assert_eq!(btbe_node_count, 3);
