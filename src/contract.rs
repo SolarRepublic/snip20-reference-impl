@@ -792,6 +792,7 @@ pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
     let account = Addr::unchecked(account);
     let account = deps.api.addr_canonicalize(account.as_str())?;
 
+    // :: added for sscrt migration
     let amount = stored_balance(deps.storage, &account)?;
     let mut balance;
     
@@ -807,6 +808,7 @@ pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
             balance = balance.saturating_add(dwb.entries[dwb_index].amount()? as u128);
         }
     }
+    // :: migration end
 
     let amount = Uint128::new(balance);
     let response = QueryAnswer::Balance { amount };
