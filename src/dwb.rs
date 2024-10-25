@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
 use crate::btbe::{merge_dwb_entry, stored_balance};
-use crate::old_state;
+use crate::legacy_state;
 use crate::state::{safe_add, safe_add_u64, CONFIG};
 use crate::transaction_history::{store_migration_action, Tx, TRANSACTIONS};
 #[cfg(feature = "gas_tracking")]
@@ -152,7 +152,7 @@ impl DelayedWriteBuffer {
         if opt_balance.is_some() { // check if entry is in btbe
             balance = opt_balance.unwrap();
         } else {
-            balance = old_state::get_old_balance(store, address);
+            balance = legacy_state::get_old_balance(store, address).unwrap_or_default();
         }
         //
         // :: migration code end

@@ -5,8 +5,9 @@ use cosmwasm_std::{
     Api, CanonicalAddr, Coin, Addr, StdError, StdResult, Storage, Uint128,
 };
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
+use secret_toolkit::storage::Item;
 
-use crate::old_append_store::AppendStore; //TypedStore, TypedStoreMut};
+use crate::{legacy_append_store::AppendStore, legacy_viewing_key}; //TypedStore, TypedStoreMut};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,9 @@ pub const KEY_TOTAL_SUPPLY: &[u8] = b"total_supply";
 pub const KEY_CONTRACT_STATUS: &[u8] = b"contract_status";
 pub const KEY_MINTERS: &[u8] = b"minters";
 pub const KEY_TX_COUNT: &[u8] = b"tx-count";
+pub const KEY_VK_SEED: &[u8] = b"vk::seed";
+
+pub static VKSEED: Item<Vec<u8>> = Item::new(KEY_VK_SEED);
 
 pub const PREFIX_CONFIG: &[u8] = b"config";
 pub const PREFIX_BALANCES: &[u8] = b"balances";
@@ -174,29 +178,32 @@ pub fn get_old_tx_count(storage: &dyn Storage) -> u64 {
 
 // Balances
 
-pub fn get_old_balance(storage: &dyn Storage, account: &CanonicalAddr) -> u128 {
+pub fn get_old_balance(storage: &dyn Storage, account: &CanonicalAddr) -> Option<u128> {
 	let balance_storage = ReadonlyPrefixedStorage::new(storage, PREFIX_BALANCES);
 	let account_bytes = account.as_slice();
 	let result = balance_storage.get(account_bytes);
 	match result {
 		// This unwrap is ok because we know we stored things correctly
-		Some(balance_bytes) => slice_to_u128(&balance_bytes).unwrap(),
-		None => 0,
+		Some(balance_bytes) => Some(slice_to_u128(&balance_bytes).unwrap()),
+		None => None,
 	}
 }
 
 pub fn clear_old_balance(storage: &mut dyn Storage, account: &CanonicalAddr) {
 	let mut balances_store = PrefixedStorage::new(storage, PREFIX_BALANCES);
-	balances_store.set(account.as_slice(), &0u128.to_be_bytes())
+    balances_store.remove(account.as_slice());
 }
-
-
 
 // Viewing Keys
 
+pub fn write_viewing_key(store: &mut dyn Storage, owner: &CanonicalAddr, key: &legacy_viewing_key::ViewingKey) {
+    let mut viewing_key_store = PrefixedStorage::new(store, PREFIX_VIEW_KEY);
+    viewing_key_store.set(owner.as_slice(), &key.to_hashed());
+}
+
 pub fn read_viewing_key(store: &dyn Storage, owner: &CanonicalAddr) -> Option<Vec<u8>> {
-    let balance_store = ReadonlyPrefixedStorage::new(store, PREFIX_VIEW_KEY);
-    balance_store.get(owner.as_slice())
+    let viewing_key_store = ReadonlyPrefixedStorage::new(store, PREFIX_VIEW_KEY);
+    viewing_key_store.get(owner.as_slice())
 }
 
 // Receiver Interface

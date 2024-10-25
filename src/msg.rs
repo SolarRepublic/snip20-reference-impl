@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{batch, old_state, transaction_history::Tx};
+use crate::{batch, legacy_state, legacy_viewing_key, transaction_history::Tx};
 use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Uint64,};
 #[cfg(feature = "gas_evaporation")]
 use cosmwasm_std::Uint64;
@@ -449,6 +449,7 @@ impl Evaporator for ExecuteMsg {
             | ExecuteMsg::SetContractStatus { gas_target, .. }
             | ExecuteMsg::AddSupportedDenoms { gas_target, .. }
             | ExecuteMsg::RemoveSupportedDenoms { gas_target, .. }
+            | ExecuteMsg::MigrateLegacyAccount { gas_target, .. }
             | ExecuteMsg::RevokePermit { gas_target, .. } => match gas_target {
                 Some(gas_target) => {
                     let gas_used = api.check_gas()?;
@@ -547,19 +548,19 @@ pub struct ViewerInfo {
 }
 
 impl QueryMsg {
-    pub fn get_validation_params(&self, api: &dyn Api) -> StdResult<(Vec<Addr>, String)> {
+    pub fn get_validation_params(&self, api: &dyn Api) -> StdResult<(Vec<Addr>, legacy_viewing_key::ViewingKey)> {
         match self {
             Self::Balance { address, key } => {
                 let address = api.addr_validate(address.as_str())?;
-                Ok((vec![address], key.clone()))
+                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
             }
             Self::TransferHistory { address, key, .. } => {
                 let address = api.addr_validate(address.as_str())?;
-                Ok((vec![address], key.clone()))
+                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
             }
             Self::TransactionHistory { address, key, .. } => {
                 let address = api.addr_validate(address.as_str())?;
-                Ok((vec![address], key.clone()))
+                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
             }
             Self::Allowance {
                 owner,
@@ -570,23 +571,23 @@ impl QueryMsg {
                 let owner = api.addr_validate(owner.as_str())?;
                 let spender = api.addr_validate(spender.as_str())?;
 
-                Ok((vec![owner, spender], key.clone()))
+                Ok((vec![owner, spender], legacy_viewing_key::ViewingKey(key.clone())))
             }
             Self::AllowancesGiven { owner, key, .. } => {
                 let owner = api.addr_validate(owner.as_str())?;
-                Ok((vec![owner], key.clone()))
+                Ok((vec![owner], legacy_viewing_key::ViewingKey(key.clone())))
             }
             Self::AllowancesReceived { spender, key, .. } => {
                 let spender = api.addr_validate(spender.as_str())?;
-                Ok((vec![spender], key.clone()))
+                Ok((vec![spender], legacy_viewing_key::ViewingKey(key.clone())))
             }
             Self::ChannelInfo { viewer, .. } => {
                 let address = api.addr_validate(viewer.address.as_str())?;
-                Ok((vec![address], viewer.viewing_key.clone()))
+                Ok((vec![address], legacy_viewing_key::ViewingKey(viewer.viewing_key.clone())))
             }
             Self::LegacyTransferHistory { address, key, .. } => {
                 let address = api.addr_validate(address.as_str())?;
-                Ok((vec![address], key.clone()))
+                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
             }
             _ => panic!("This query type does not require authentication"),
         }
@@ -700,7 +701,7 @@ pub enum QueryAnswer {
 
     // Pre-DWB history
     LegacyTransferHistory {
-        txs: Vec<old_state::Tx>,
+        txs: Vec<legacy_state::Tx>,
     },
 
     #[cfg(feature = "gas_tracking")]

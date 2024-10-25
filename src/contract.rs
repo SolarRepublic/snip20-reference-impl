@@ -12,7 +12,8 @@ use secret_toolkit::utils::{pad_handle_result, pad_query_result};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{hkdf_sha_256, sha_256, ContractPrng};
 
-use crate::{batch, old_state,};
+use crate::legacy_state::VKSEED;
+use crate::{batch, legacy_state, legacy_viewing_key,};
 
 #[cfg(feature = "gas_tracking")]
 use crate::dwb::log_dwb;
@@ -54,19 +55,19 @@ pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> StdResult<Response>
     // migrate old data
 
     // :: minters
-    let minters = old_state::get_old_minters(deps.storage);
+    let minters = legacy_state::get_old_minters(deps.storage);
     MintersStore::save(deps.storage, minters)?;
 
     // :: total supply
-    let total_supply = old_state::get_old_total_supply(deps.storage);
+    let total_supply = legacy_state::get_old_total_supply(deps.storage);
     TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
 
     // :: contract status
-    let status = old_state::get_old_contract_status(deps.storage);
+    let status = legacy_state::get_old_contract_status(deps.storage);
     CONTRACT_STATUS.save(deps.storage, &u8_to_status_level(status).unwrap())?;
 
     // :: constants
-    let constants = old_state::get_old_constants(deps.storage)?;
+    let constants = legacy_state::get_old_constants(deps.storage)?;
     CONFIG.save(
         deps.storage,
         &Config {
@@ -85,7 +86,9 @@ pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> StdResult<Response>
         }
     )?;
 
-    // :: do not migrate receivers
+    // :: do not migrate receivers, use old storage
+
+    // :: do not migrate viewing keys, use old storage
 
     // set up dwbs
 
@@ -134,7 +137,7 @@ pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> StdResult<Response>
         "contract_viewing_key".as_bytes(),
         32,
     )?;
-    ViewingKey::set_seed(deps.storage, &vk_seed);
+    VKSEED.save(deps.storage, &vk_seed)?;
 
     Ok(Response::default())
 }
@@ -318,10 +321,10 @@ fn migrate_legacy_account(
     if opt_balance.is_some() { // check if entry is in btbe
         return Err(StdError::generic_err("Account already migrated"));
     } else {
-        old_balance = old_state::get_old_balance(deps.storage, &sender_raw);
+        old_balance = legacy_state::get_old_balance(deps.storage, &sender_raw);
     }
 
-    if old_balance == 0 {
+    if old_balance == None {
         return Err(StdError::generic_err("No legacy balance"));
     }
 
@@ -500,8 +503,15 @@ pub fn viewing_keys_queries(deps: Deps, env: Env,  msg: QueryMsg) -> StdResult<B
     let (addresses, key) = msg.get_validation_params(deps.api)?;
 
     for address in addresses {
-        let result = ViewingKey::check(deps.storage, address.as_str(), key.as_str());
-        if result.is_ok() {
+        // legacy viewing key
+        let canonical_addr = deps.api.addr_canonicalize(address.as_str())?;
+        let expected_key = legacy_state::read_viewing_key(deps.storage, &canonical_addr);
+
+        if expected_key.is_none() {
+            // Checking the key will take significant time. We don't want to exit immediately if it isn't set
+            // in a way which will allow to time the command and determine if a viewing key doesn't exist
+            key.check_viewing_key(&[0u8; legacy_viewing_key::VIEWING_KEY_SIZE]);
+        } else if key.check_viewing_key(expected_key.unwrap().as_slice()) {
             return match msg {
                 // Base
                 QueryMsg::Balance { address, .. } => query_balance(deps, address),
@@ -777,7 +787,7 @@ pub fn query_legacy_transfer_history(
     page_size: u32,
 ) -> StdResult<Binary> {
     let address = deps.api.addr_canonicalize(account.as_str()).unwrap();
-    let txs = old_state::get_old_transfers(deps.api, deps.storage, &address, page, page_size)?;
+    let txs = legacy_state::get_old_transfers(deps.api, deps.storage, &address, page, page_size)?;
 
     let result = QueryAnswer::LegacyTransferHistory { txs };
     to_binary(&result)
@@ -801,7 +811,7 @@ pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
 
     if amount.is_none() && dwb_index == 0 {
         // no record of balance in dwb or btbe
-        balance = old_state::get_old_balance(deps.storage, &account);
+        balance = legacy_state::get_old_balance(deps.storage, &account).unwrap_or_default();
     } else {
         balance = amount.unwrap_or_default();
         if dwb_index > 0 {
@@ -1277,6 +1287,14 @@ fn try_batch_mint(
 
 pub fn try_set_key(deps: DepsMut, info: MessageInfo, key: String) -> StdResult<Response> {
     ViewingKey::set(deps.storage, info.sender.as_str(), key.as_str());
+
+    // legacy set key
+    let vk = legacy_viewing_key::ViewingKey(key);
+
+    let message_sender = deps.api.addr_canonicalize(info.sender.as_str())?;
+    legacy_state::write_viewing_key(deps.storage, &message_sender, &vk);
+
+    
     Ok(
         Response::new().set_data(to_binary(&ExecuteAnswer::SetViewingKey {
             status: Success,
@@ -1293,15 +1311,14 @@ pub fn try_create_key(
 ) -> StdResult<Response> {
     let entropy = [entropy.unwrap_or_default().as_bytes(), &rng.rand_bytes()].concat();
 
-    let key = ViewingKey::create(
-        deps.storage,
-        &info,
-        &env,
-        info.sender.as_str(),
-        &entropy,
-    );
+    // legacy create key
+    let vk_seed = VKSEED.load(deps.storage)?;
+    let key = legacy_viewing_key::ViewingKey::new(&env, &info, &vk_seed, entropy.as_slice());
 
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::CreateViewingKey { key })?))
+    let message_sender = deps.api.addr_canonicalize(info.sender.as_str())?;
+    legacy_state::write_viewing_key(deps.storage, &message_sender, &key);
+
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::CreateViewingKey { key: key.0 })?))
 }
 
 fn set_contract_status(
@@ -1786,7 +1803,7 @@ fn try_add_receiver_api_callback(
     }
 
     //let receiver_hash = ReceiverHashStore::may_load(storage, &recipient)?;
-    let receiver_hash = old_state::get_receiver_hash(storage, &recipient);
+    let receiver_hash = legacy_state::get_receiver_hash(storage, &recipient);
     if let Some(receiver_hash) = receiver_hash {
         let receiver_hash = receiver_hash?;
         let receiver_msg = Snip20ReceiveMsg::new(sender, from, amount, memo, msg);
@@ -2007,7 +2024,7 @@ fn try_register_receive(
     code_hash: String,
 ) -> StdResult<Response> {
     //ReceiverHashStore::save(deps.storage, &info.sender, code_hash)?;
-    old_state::set_receiver_hash(deps.storage, &info.sender, code_hash);
+    legacy_state::set_receiver_hash(deps.storage, &info.sender, code_hash);
 
     let data = to_binary(&ExecuteAnswer::RegisterReceive { status: Success })?;
     Ok(Response::new()
@@ -4175,7 +4192,7 @@ mod tests {
         assert!(ensure_success(result));
 
         let hash =
-            old_state::get_receiver_hash(&deps.storage, &Addr::unchecked("contract".to_string()))
+            legacy_state::get_receiver_hash(&deps.storage, &Addr::unchecked("contract".to_string()))
                 .unwrap()
                 .unwrap();
         assert_eq!(hash, "this_is_a_hash_of_a_code".to_string());
