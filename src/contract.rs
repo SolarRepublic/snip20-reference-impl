@@ -345,7 +345,7 @@ fn migrate_legacy_account(
         &mut dwb_entry,
         None,
         #[cfg(feature = "gas_tracking")]
-        tracker,
+        &mut tracker,
         &env.block,
     )?;    
 

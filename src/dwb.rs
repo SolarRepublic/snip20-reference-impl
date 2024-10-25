@@ -118,8 +118,8 @@ impl DelayedWriteBuffer {
         #[cfg(feature = "gas_tracking")]
         group1.logf(format!(
             "@entry=address:{}, amount:{}",
-            entry.recipient()?,
-            entry.amount()?
+            dwb_entry.recipient()?,
+            dwb_entry.amount()?
         ));
 
         merge_dwb_entry(
