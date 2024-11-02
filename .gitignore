@@ -1,6 +1,6 @@
 # Build results
 /target
-/tests/dwb/dist/
+/tests/*/dist/**
 contract.wasm
 contract.wasm.gz
 

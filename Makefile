@@ -1,5 +1,10 @@
 SECRETCLI = docker exec -it secretdev /usr/bin/secretcli
 
+SECRET_GRPC_PORT ?= 9090
+SECRET_LCD_PORT ?= 1317
+SECRET_RPC_PORT ?= 26657
+LOCALSECRET_VERSION ?= v1.15.0-beta.14
+
 .PHONY: all
 all: clippy test
 
@@ -79,11 +84,17 @@ contract.wasm:
 	cp ./target/wasm32-unknown-unknown/release/snip20_reference_impl.wasm ./contract.wasm
 
 .PHONY: start-server
-start-server: # CTRL+C to stop
-	docker run -it --rm \
-		-p 9091:9091 -p 26657:26657 -p 26656:26656 -p 1317:1317 -p 5000:5000 \
+start-server:
+	docker run -d --rm \
+		-e FAST_BLOCKS=true \
+		-p $(SECRET_RPC_PORT):26657 \
+		-p $(SECRET_LCD_PORT):1317 \
+		-p $(SECRET_GRPC_PORT):9090 \
+		-p 5000:5000 \
 		-v $$(pwd):/root/code \
-		--name secretdev docker pull ghcr.io/scrtlabs/localsecret:v1.13.1
+		--name secretdev \
+		ghcr.io/scrtlabs/localsecret:$(LOCALSECRET_VERSION)
+	docker logs -f secretdev
 
 .PHONY: schema
 schema:
