@@ -1,22 +1,30 @@
 /* eslint-disable no-cond-assign */
 
 
-
-// const R_STATEMENT = /^\s*(\w+)\b/;
 const R_INDENT = /([ \t]*)/y;
-const R_OPERATION = /(\w+)\b\s*(:?)[ \t]*/y;
+const R_OPERATION = /([\w$_]+)\b\s*(:?)[ \t]*/y;
+const R_BREAK = /-{3,}/y;
 const R_LINE = /([^\n]*)/y;
 const R_CLEAR = /(?:[ \t]*(?:;;[^\n]*)?\n)*/y;
 
 type Match = RegExpExecArray | null;
 
-type Statement = {
-	method: string;
-	sender: string;
-	args: string[];
+export type Statement = {
+	type: 'statement';
+	value: {
+		method: string;
+		sender: string;
+		args: string[];
+		fail?: boolean;
+		error?: string;
+	};
 };
 
-type StatementResult = Statement | undefined | void;
+type MetaEval = {
+	type: 'break';
+};
+
+type StatementResult = Statement | MetaEval | undefined | void;
 
 export class Parser {
 	protected _i_match = 0;
@@ -64,11 +72,26 @@ export class Parser {
 
 			const a_parts = s_line.trim().split(/\s+/g);
 
+			// expects error
+			let b_fail = false;
+			let s_error = '';
+			const i_error = a_parts.findIndex(s => s.startsWith('**fail'));
+			if(i_error >= 0) {
+				b_fail = true;
+				s_error = a_parts.slice(i_error).join(' ');
+				a_parts.splice(i_error);
+			}
+
 			// compile statement
 			return {
-				method: s_method,
-				sender: s_sender,
-				args: a_parts,
+				type: 'statement',
+				value: {
+					method: s_method,
+					sender: s_sender,
+					args: a_parts,
+					fail: b_fail,
+					error: s_error,
+				},
 			};
 		}
 	}
@@ -105,6 +128,10 @@ export class Parser {
 	statement(): StatementResult {
 		let m_next: Match;
 
+		// clear preceding newlines
+		this._clear();
+
+		// match indent if any
 		if(m_next=this._match(R_INDENT)) {
 			const [, s_indent] = m_next;
 
@@ -119,7 +146,8 @@ export class Parser {
 				return this.sender();
 			}
 
-			if(m_next=this._match(R_OPERATION, true)) {
+			// operation
+			if(m_next=this._match(R_OPERATION)) {
 				const [, s_method, s_colon] = m_next;
 
 				// clear after token
@@ -132,12 +160,21 @@ export class Parser {
 				// evaluate
 				return this.sender(s_method);
 			}
+			// break
+			else if(this._match(R_BREAK)) {
+				// clear context
+				this._s_method = '';
+				this._s_sender = '';
+
+				// return break statement
+				return {
+					type: 'break',
+				};
+			}
 		}
 	}
 
 	* program(): Generator<StatementResult, void, unknown> {
-		this._clear();
-
 		const nl_program = this._s_program.length;
 
 		while(-1 !== this._i_match && this._i_match < nl_program) {

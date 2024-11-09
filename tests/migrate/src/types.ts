@@ -6,6 +6,7 @@ type ArgTypeMap = {
 	u32: number;
 	token: bigint;
 	account: WeakSecretAccAddr;
+	timestamp: number;
 	json: JsonObject;
 };
 
@@ -26,3 +27,17 @@ type ParseArgsList<a_args extends unknown[]> = a_args extends [infer s_arg0, ...
 	: {};
 
 export type ParseArgsString<s_args extends string> = ParseArgsList<SplitComma<s_args>>;
+
+type ParseReturnString<s_return extends string> = s_return extends `{${infer s_struct}}`
+	? ParseArgsString<s_struct>
+	: ParseArgsString<s_return>;
+
+export type ParseSignatureString<s_sig extends string> = s_sig extends `${infer s_args} => ${infer s_return}`
+	? {
+		args: ParseArgsString<s_args>;
+		return: ParseReturnString<s_return>;
+	}
+	: {
+		args: ParseArgsString<s_sig>;
+		return: JsonObject;
+	};

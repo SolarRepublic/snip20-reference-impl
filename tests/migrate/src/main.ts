@@ -1,75 +1,77 @@
-
 import type {SecretContractInterface, FungibleTransferCall, Snip24} from '@solar-republic/contractor';
-
 import type {WeakUint128Str} from '@solar-republic/types';
 
 import {readFileSync} from 'node:fs';
 
-import {bytes, bytes_to_base64, entries} from '@blake.regalia/belt';
+import {bytes, bytes_to_base64} from '@blake.regalia/belt';
 import {SecretApp, SecretContract, random_32} from '@solar-republic/neutrino';
 
-import {P_SECRET_LCD, X_GAS_PRICE, k_wallet_a, k_wallet_admin, k_wallet_b, k_wallet_c, k_wallet_d} from './constants';
+import {P_SECRET_LCD, SR_LOCAL_WASM, X_GAS_PRICE, k_wallet_a, k_wallet_admin, k_wallet_b, k_wallet_c, k_wallet_d} from './constants';
 import {upload_code, instantiate_contract} from './contract';
 
-// make unique contract label
-const S_CONTRACT_LABEL = 'snip2x-test_'+bytes_to_base64(crypto.getRandomValues(bytes(6)));
 
-// read WASM file
-const atu8_wasm = readFileSync('../../contract.wasm');
+async function migrate_contract() {
+	// make unique contract label
+	const S_CONTRACT_LABEL = 'snip2x-test_'+bytes_to_base64(crypto.getRandomValues(bytes(6)));
 
-// upload code to chain
-console.debug(`Uploading code...`);
-const sg_code_id = await upload_code(k_wallet_a, atu8_wasm);
+	// read WASM file
+	const atu8_wasm = readFileSync(SR_LOCAL_WASM);
 
-// instantiate contract
-console.debug(`Instantiating contract...`);
-const sa_snip = await instantiate_contract(k_wallet_a, sg_code_id, {
-	name: S_CONTRACT_LABEL,
-	symbol: 'TKN',
-	decimals: 6,
-	admin: k_wallet_admin.addr,
-	initial_balances: [],
-	// initial_balances: entries({
-	// 	[k_wallet_a.addr]: 10_000_000000n,
-	// }).map(([sa_account, xg_balance]) => ({
-	// 	address: sa_account,
-	// 	amount: `${xg_balance}`,
-	// })),
-	prng_seed: bytes_to_base64(random_32()),
-	config: {
-		public_total_supply: true,
-		enable_deposit: true,
-		enable_redeem: true,
-		enable_mint: true,
-		enable_burn: true,
-	},
-});
+	// upload code to chain
+	console.debug(`Uploading code...`);
+	const sg_code_id = await upload_code(k_wallet_a, atu8_wasm);
 
-console.debug(`Running tests against ${sa_snip}...`);
+	// instantiate contract
+	console.debug(`Instantiating contract...`);
+	const sa_snip = await instantiate_contract(k_wallet_a, sg_code_id, {
+		name: S_CONTRACT_LABEL,
+		symbol: 'TKN',
+		decimals: 6,
+		admin: k_wallet_admin.addr,
+		initial_balances: [],
+		// initial_balances: entries({
+		// 	[k_wallet_a.addr]: 10_000_000000n,
+		// }).map(([sa_account, xg_balance]) => ({
+		// 	address: sa_account,
+		// 	amount: `${xg_balance}`,
+		// })),
+		prng_seed: bytes_to_base64(random_32()),
+		config: {
+			public_total_supply: true,
+			enable_deposit: true,
+			enable_redeem: true,
+			enable_mint: true,
+			enable_burn: true,
+		},
+	});
 
-// @ts-expect-error deep instantiation
-const k_contract = await SecretContract<SecretContractInterface<{
-	extends: Snip24;
-	executions: {
-		transfer: [FungibleTransferCall & {
-			gas_target?: WeakUint128Str;
-		}];
+	console.debug(`Running tests against ${sa_snip}...`);
+
+	// @ts-expect-error deep instantiation
+	const k_contract = await SecretContract<SecretContractInterface<{
+		extends: Snip24;
+		executions: {
+			transfer: [FungibleTransferCall & {
+				gas_target?: WeakUint128Str;
+			}];
+		};
+	}>>(P_SECRET_LCD, sa_snip);
+
+	const k_app_a = SecretApp(k_wallet_a, k_contract, X_GAS_PRICE);
+	const k_app_b = SecretApp(k_wallet_b, k_contract, X_GAS_PRICE);
+	const k_app_c = SecretApp(k_wallet_c, k_contract, X_GAS_PRICE);
+	const k_app_d = SecretApp(k_wallet_d, k_contract, X_GAS_PRICE);
+
+	const H_APPS = {
+		a: k_app_a,
+		b: k_app_b,
+		c: k_app_c,
+		d: k_app_d,
 	};
-}>>(P_SECRET_LCD, sa_snip);
+}
 
-const k_app_a = SecretApp(k_wallet_a, k_contract, X_GAS_PRICE);
-const k_app_b = SecretApp(k_wallet_b, k_contract, X_GAS_PRICE);
-const k_app_c = SecretApp(k_wallet_c, k_contract, X_GAS_PRICE);
-const k_app_d = SecretApp(k_wallet_d, k_contract, X_GAS_PRICE);
-
-const H_APPS = {
-	a: k_app_a,
-	b: k_app_b,
-	c: k_app_c,
-	d: k_app_d,
-};
-
-
+await preload_original_contract();
+await migrate_contract();
 
 // {
 // 	const k_app_sim = SecretApp(k_wallet, k_contract, X_GAS_PRICE);
