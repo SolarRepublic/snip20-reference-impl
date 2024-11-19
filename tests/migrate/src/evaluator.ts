@@ -3,7 +3,7 @@ import type {ParseSignatureString} from './types';
 import type {EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
 import type {WeakSecretAccAddr, SecretContract, TxResultTuple, CwSecretAccAddr} from '@solar-republic/neutrino';
 
-import {__UNDEFINED, F_IDENTITY, is_number, keys, parse_json_safe, snake, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
+import {__UNDEFINED, F_IDENTITY, is_number, is_undefined, keys, parse_json_safe, snake, stringify_json, text_to_base64, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
 import {broadcast_result, create_and_sign_tx_direct, exec_fees, secret_contract_responses_decrypt} from '@solar-republic/neutrino';
 
 import {X_GAS_PRICE} from './constants';
@@ -50,21 +50,21 @@ const H_TYPE_CASTERS: Dict<(s_in: string) => any> = {
 	token: s_token => BigInt(s_token.replace(/_/g, '')),
 	account: s => ExternallyOwnedAccount.at(s).address,
 	timestamp(s_spec) {
-		const d_relative = /^[+-]([\d.]+)([smhd])$/.exec(s_spec);
-		if(d_relative) {
-			const [s_sign, s_amount, s_unit] = d_relative;
+		const m_timestamp = /^([+-]?)([\d.]+)([smhd])$/.exec(s_spec);
+		if(m_timestamp) {
+			const [, s_sign, s_amount, s_unit] = m_timestamp;
 			const x_sign = '-' === s_sign? -1: 1;
-			return Date.now() + (+s_amount * x_sign * {
+			return (Date.now() + (+s_amount * x_sign * {
 				s: 1e3,
 				m: 60e3,
 				h: 360e3,
 				d: 360e3*24,
-			}[s_unit]!);
+			}[s_unit]!)) / 1e3;
 		}
 
 		return __UNDEFINED;
 	},
-	json: s => parse_json_safe(s) || {},
+	json: s => s? text_to_base64(s): __UNDEFINED,
 } satisfies Dict<(s_in: string) => any>;
 
 export class Evaluator {
@@ -172,7 +172,11 @@ export class Evaluator {
 
 				// set arg after casting
 				try {
-					g_args_raw[s_name] = await H_TYPE_CASTERS[s_type](a_args[i_param]);
+					// interpret value
+					const z_value = g_args_raw[s_name] = await H_TYPE_CASTERS[s_type](a_args[i_param]);
+
+					// delete key if value is undefined
+					if(is_undefined(z_value)) delete g_args_raw[s_name];
 				}
 				catch(e_cast) {
 					debugger;
@@ -205,7 +209,7 @@ export class Evaluator {
 			const [atu8_exec, atu8_nonce] = await k_snip.exec(g_exec, sa_sender, g_extra?.funds? [[`${g_extra.funds}`, 'uscrt']]: __UNDEFINED);
 
 			// different sender than previous item or expecting failure
-			if(b_flushed || sa_previous !== sa_sender as string || b_fail) {
+			if(b_flushed || sa_previous !== sa_sender as string || b_fail || !this._hm_pending.size) {
 				const b_was_flushed = b_flushed;
 				b_flushed = false;
 
@@ -238,6 +242,7 @@ export class Evaluator {
 							}
 
 							// OK
+							return;
 						}
 						// not expecting failure
 						else {

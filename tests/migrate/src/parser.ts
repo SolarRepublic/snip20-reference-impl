@@ -77,7 +77,7 @@ export class Parser {
 			const i_error = a_parts.findIndex(s => s.startsWith('**fail'));
 			if(i_error >= 0) {
 				b_fail = true;
-				s_error = a_parts.slice(i_error).join(' ');
+				s_error = a_parts.slice(i_error+1).join(' ');
 				a_parts.splice(i_error);
 			}
 

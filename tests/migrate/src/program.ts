@@ -79,18 +79,18 @@ const H_FUNCTIONS = {
 		xg_total_supply -= g_args.amount;
 	}),
 
-	transferFrom: handler('amount: token, sender: account, recipient: account', (k_sender, g_args) => {
-		balance(k_sender, -g_args.amount);
+	transferFrom: handler('amount: token, owner: account, recipient: account', (k_sender, g_args) => {
+		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
 		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
 	}),
 
-	sendFrom: handler('amount: token, sender: account, recipient: account, msg: json', (k_sender, g_args) => {
-		balance(k_sender, -g_args.amount);
+	sendFrom: handler('amount: token, owner: account, recipient: account, msg: json', (k_sender, g_args) => {
+		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
 		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
 	}),
 
-	burnFrom: handler('amount: token', (k_sender, g_args) => {
-		balance(ExternallyOwnedAccount.at(g_args.sender), -g_args.amount);
+	burnFrom: handler('amount: token, owner: account', (k_sender, g_args) => {
+		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
 		xg_total_supply -= g_args.amount;
 	}),
 
@@ -101,7 +101,7 @@ const H_FUNCTIONS = {
 		const g_prev = h_given[sa_spender];
 
 		h_given[sa_spender] = h_recvd[sa_sender] = {
-			amount: bigint_lesser(XG_UINT128_MAX, (!g_prev || g_prev.expiration < Date.now()? 0n: g_prev.amount) + xg_amount),
+			amount: bigint_lesser(XG_UINT128_MAX, (!g_prev?.expiration || g_prev.expiration < Date.now()? 0n: g_prev.amount) + xg_amount),
 			expiration: n_exp,
 		};
 	}),
@@ -113,7 +113,7 @@ const H_FUNCTIONS = {
 		const g_prev = h_given[sa_spender];
 
 		h_given[sa_sender] = h_recvd[sa_sender] = {
-			amount: bigint_greater(0n, (!g_prev || g_prev.expiration < Date.now()? 0n: g_prev.amount) - xg_amount),
+			amount: bigint_greater(0n, (!g_prev?.expiration || g_prev.expiration < Date.now()? 0n: g_prev.amount) - xg_amount),
 			expiration: n_exp,
 		};
 	}),
@@ -243,9 +243,13 @@ const s_program = `
 		David:
 			2 David
 			0 David
-			2 Alice
-			0 Bob
+			2 Alice {}
+			1 Alice {"confirm":{}}
+			0 Bob {}
 			1 Carol
+			1 Carol {}
+
+	---
 
 	increaseAllowance:
 		Alice:
@@ -265,18 +269,24 @@ const s_program = `
 			2 Carol
 			1 David
 
+	---
+
 	transferFrom:
 		Bob:
 			8 Alice Carol
+			0 Carol David
+			1000 Alice David  **fail insufficient allowance
 
-	increaseAllowance
+	increaseAllowance:
 		Bob:
 			100 Alice -1m
-		
-	transfer:
-		Bob:
-			5 Alice     **fail
 
+	---
+	
+	transferFrom:
+		Alice:
+			5 Bob Carol     **fail insufficient allowance
+	
 	burn Alice 1
 	burnFrom Bob 1 Alice Carol
 
