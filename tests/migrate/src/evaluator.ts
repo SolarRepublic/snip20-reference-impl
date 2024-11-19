@@ -8,6 +8,7 @@ import {broadcast_result, create_and_sign_tx_direct, exec_fees, secret_contract_
 
 import {X_GAS_PRICE} from './constants';
 import {K_TEF_LOCAL} from './contract';
+import {bank} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
 
 type WithArgs<a_extra extends Array<any>, w_return=void> = (k_sender: ExternallyOwnedAccount, g_args: {
@@ -54,12 +55,12 @@ const H_TYPE_CASTERS: Dict<(s_in: string) => any> = {
 		if(m_timestamp) {
 			const [, s_sign, s_amount, s_unit] = m_timestamp;
 			const x_sign = '-' === s_sign? -1: 1;
-			return (Date.now() + (+s_amount * x_sign * {
+			return Math.floor((Date.now() + (+s_amount * x_sign * {
 				s: 1e3,
 				m: 60e3,
 				h: 360e3,
 				d: 360e3*24,
-			}[s_unit]!)) / 1e3;
+			}[s_unit]!)) / 1e3);
 		}
 
 		return __UNDEFINED;
@@ -94,13 +95,18 @@ export class Evaluator {
 		await Promise.all([..._hm_pending.entries()].map(async([k_eoa, [a_execs, f_handler]]) => {
 			const xg_limit = 60_000n + (40_000n * BigInt(a_execs.length));
 
+			const a_fees = exec_fees(xg_limit, X_GAS_PRICE);
+
 			// sign transaction
 			const [atu8_raw, atu8_signdoc, si_txn] = await create_and_sign_tx_direct(
 				k_eoa.wallet,
 				a_execs.map(([atu8]) => atu8),
-				exec_fees(xg_limit, X_GAS_PRICE),
+				a_fees,
 				xg_limit
 			);
+
+			// update bank from gas spent
+			bank(k_eoa, -BigInt(a_fees[0][0]+''));
 
 			// broadcast
 			const a_result = await broadcast_result(

@@ -1,14 +1,16 @@
-import type {WeakSecretAccAddr, Wallet} from '@solar-republic/neutrino';
+import {readFileSync} from 'node:fs';
 
 import {bigint_greater, bigint_lesser, MutexPool} from '@blake.regalia/belt';
 
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
-import {encodeCosmosBankMsgSend, SI_MESSAGE_TYPE_COSMOS_BANK_MSG_SEND} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/tx';
-import {encodeGoogleProtobufAny, type EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
-import {broadcast_result, create_and_sign_tx_direct, exec_fees, query_secret_contract, sign_secret_query_permit} from '@solar-republic/neutrino';
+import {querySecretComputeCodeHashByCodeId} from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/query';
+import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
+import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
+import {query_secret_contract, SecretWasm, sign_secret_query_permit} from '@solar-republic/neutrino';
 
-import {k_wallet_a, k_wallet_admin, k_wallet_b, P_SECRET_LCD, X_GAS_PRICE} from './constants';
-import {K_TEF_LOCAL, preload_original_contract} from './contract';
+import {k_wallet_a, k_wallet_admin, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
+import {migrate_contract, preload_original_contract, upload_code} from './contract';
+import {bank, balance, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
 import {Evaluator, handler} from './evaluator';
 import {Parser} from './parser';
@@ -17,30 +19,31 @@ const XG_UINT128_MAX = (1n << 128n) - 1n;
 
 let xg_total_supply = 0n;
 
+const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
+
 // preload sSCRT
-const k_snip_original = await preload_original_contract('secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek', k_wallet_admin);
+const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_admin);
 
+/*
+available sSCRT methods:
+	`redeem`,
+	`deposit`,
+	`transfer`,
+	`send`,
+	`register_receive`,
+	`create_viewing_key`,
+	`set_viewing_key`,
+	`increase_allowance`,
+	`decrease_allowance`,
+	`transfer_from`,
+	`send_from`,
+	`change_admin`,
+	`set_contract_status`
+*/
 
-function balance(k_sender: ExternallyOwnedAccount, xg_amount: bigint) {
-	k_sender.bank += xg_amount;
-
-	// cannot be negative
-	if(k_sender.bank < 0n) {
-		throw Error(`Unexpected negative balance when modifying with ${xg_amount} on ${k_sender.address}`);
-	}
-}
-
-function bank(k_sender: ExternallyOwnedAccount, xg_amount: bigint) {
-	k_sender.bank += xg_amount;
-
-	// cannot be negative
-	if(k_sender.bank < 0n) {
-		throw Error(`Unexpected negative bank when modifying with ${xg_amount} on ${k_sender.address}`);
-	}
-}
-
-
-
+/**
+ * suite handlers for tracking and double checking expected states in contract
+ */
 const H_FUNCTIONS = {
 	createViewingKey: handler('entropy: string => key: string', (k_sender, g_args, g_answer) => {
 		k_sender.viewingKey = g_answer.key;
@@ -73,12 +76,6 @@ const H_FUNCTIONS = {
 		balance(k_sender, -g_args.amount);
 		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
 	}),
-
-	burn: handler('amount: token', (k_sender, g_args) => {
-		balance(k_sender, -g_args.amount);
-		xg_total_supply -= g_args.amount;
-	}),
-
 	transferFrom: handler('amount: token, owner: account, recipient: account', (k_sender, g_args) => {
 		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
 		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
@@ -87,11 +84,6 @@ const H_FUNCTIONS = {
 	sendFrom: handler('amount: token, owner: account, recipient: account, msg: json', (k_sender, g_args) => {
 		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
 		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
-	}),
-
-	burnFrom: handler('amount: token, owner: account', (k_sender, g_args) => {
-		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
-		xg_total_supply -= g_args.amount;
 	}),
 
 	increaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
@@ -117,9 +109,23 @@ const H_FUNCTIONS = {
 			expiration: n_exp,
 		};
 	}),
+
+	burn: handler('amount: token', (k_sender, g_args) => {
+		balance(k_sender, -g_args.amount);
+		xg_total_supply -= g_args.amount;
+	}),
+
+	burnFrom: handler('amount: token, owner: account', (k_sender, g_args) => {
+		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
+		xg_total_supply -= g_args.amount;
+	}),
 };
 
 
+// genesis accounts
+const a_genesis = ['$a', '$b', '$c', '$d'];
+
+// alias accounts
 const a_aliases = [
 	'Alice',
 	'Bob',
@@ -127,54 +133,28 @@ const a_aliases = [
 	'David',
 ];
 
-async function bank_send(k_wallet: Wallet<'secret'>, xg_amount: bigint, a_recipients: WeakSecretAccAddr[]) {
-	const a_msgs: EncodedGoogleProtobufAny[] = [];
-
-	let sg_limit = 50_000n;
-
-	// seed all accounts with funds for gas
-	for(const sa_recipient of a_recipients) {
-		const atu8_bank = encodeGoogleProtobufAny(
-			SI_MESSAGE_TYPE_COSMOS_BANK_MSG_SEND,
-			encodeCosmosBankMsgSend(k_wallet.addr, sa_recipient, [[`${xg_amount}`, 'uscrt']])
-		);
-
-		a_msgs.push(atu8_bank);
-
-		sg_limit += 5_500n;
-	}
-
-	const [atu8_raw,, si_txn] = await create_and_sign_tx_direct(k_wallet, a_msgs, exec_fees(sg_limit, X_GAS_PRICE), sg_limit);
-
-	const [xc_code, sx_res, g_meta, atu8_data, h_events] = await broadcast_result(k_wallet, atu8_raw, si_txn, K_TEF_LOCAL);
-
-	// failed
-	if(xc_code) {
-		debugger;
-		throw Error(g_meta?.log ?? sx_res);
-	}
-}
-
-const a_genesis = ['$a', '$b', '$c', '$d'];
+// numeric accounts
 const a_numerics = Array(1024).fill(0).map((w, i) => `a${i}`);
 
+// instantiate EOAs for all accounts
 const a_eoas_genesis = await Promise.all(a_genesis.map(s => ExternallyOwnedAccount.fromAlias(s)));
 const a_eoas_aliased = await Promise.all(a_aliases.map(s => ExternallyOwnedAccount.fromAlias(s)));
 const a_eoas_numeric = await Promise.all(a_numerics.map(s => ExternallyOwnedAccount.fromAlias(s)));
 
-// all eoas
+// concat all eoas
 const a_eoas = [...a_eoas_genesis, ...a_eoas_aliased, ...a_eoas_numeric];
 
-// each genesis account starts with 1M SCRT
+// determine how much uscrt each genesis account actually has
 for(const k_eoa of a_eoas_genesis) {
-	bank(k_eoa, 1_000_000_000000n);
+	const [,, g_bank] = await queryCosmosBankBalance(P_SECRET_LCD, k_eoa.address, 'uscrt');
+	bank(k_eoa, BigInt(g_bank?.balance?.amount ?? '0'));
 }
 
 // fund all aliases
-await bank_send(k_wallet_a, 5_000000n, a_eoas_aliased.map(k => k.address));
+await bank_send(a_eoas_genesis[0], 5_000000n, a_eoas_aliased);
 
 // fund first 1024 numeric accounts
-await bank_send(k_wallet_b, 5_000000n, a_eoas_numeric.map(k => k.address));
+await bank_send(a_eoas_genesis[1], 5_000000n, a_eoas_numeric);
 
 // sign query permit for all accounts
 await Promise.all([
@@ -275,7 +255,7 @@ const s_program = `
 		Bob:
 			8 Alice Carol
 			0 Carol David
-			1000 Alice David  **fail insufficient allowance
+			1000 Alice David    **fail insufficient allowance
 
 	increaseAllowance:
 		Bob:
@@ -285,21 +265,27 @@ const s_program = `
 	
 	transferFrom:
 		Alice:
-			5 Bob Carol     **fail insufficient allowance
-	
-	burn Alice 1
-	burnFrom Bob 1 Alice Carol
+			5 Bob Carol         **fail insufficient allowance
 
 	---
+
+	redeem:
+		Alice 20
+		Bob 0                  **fail invalid coins
+		Carol 1
+		David 900_000_000_000  **fail insufficient funds
 
 	${s_prog_vks}
 `;
 
 
+// parse program
 const k_parser = new Parser(s_program);
 
+// prep evaluator
 const k_evaluator = new Evaluator(H_FUNCTIONS);
 
+// evaluate program
 await k_evaluator.evaluate(k_parser, k_snip_original);
 
 // concurrency
@@ -319,6 +305,7 @@ await Promise.all(a_eoas.map(k_eoa => kl_queries.use(async() => {
 	const [[,, g_bank], a_results] = await Promise.all([
 		// query bank module
 		queryCosmosBankBalance(P_SECRET_LCD, sa_owner, 'uscrt'),
+
 		// query contract balance
 		query_secret_contract(k_snip_original, 'balance', {
 			address: sa_owner,
@@ -339,46 +326,32 @@ await Promise.all(a_eoas.map(k_eoa => kl_queries.use(async() => {
 		throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}`);
 	}
 
-
-	console.log(`${s_alias || sa_owner}: ${xg_bank} // ${xg_balance}`);
+	// TODO: query allowances
 })));
 
-debugger;
+//
+console.log(`✅ Verified ${a_eoas.length} bank balances and SNIP balances`);
 
-const s_test = `;
-	createViewingKey Alice secret
+// read WASM file
+const atu8_wasm = readFileSync(SR_LOCAL_WASM);
 
-	deposit Alice 10
+// upload code to chain
+console.debug(`Uploading code...`);
+const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
 
-	multiple:
-		Alice:
-	
-	send:
+{
+	console.debug('Encoding migration message...');
+	const [,, g_reg] = await querySecretRegistrationTxKey(P_SECRET_LCD);
+	const [atu8_cons_pk] = destructSecretRegistrationKey(g_reg!);
+	const k_wasm = SecretWasm(atu8_cons_pk!);
 
-	setViewingKey
+	// encrypt migrate message
+	const atu8_msg = await k_wasm.encodeMsg(sb16_codehash, {});
 
-	increaseAllowance
-	decreaseAllowance
-	transferFrom
-	batchTransferFrom
-	sendFrom
-	batchSendFrom
-	batchTransferFrom
-	burnFrom
-	batchBurnFrom
-	mint
-	batchMint
-	revokePermit
-	addSupportedDenoms
-	removeSupportedDenoms
+	// run migration
+	console.debug(`Running migration...`);
+	const a_data = await migrate_contract(k_snip_original.addr, k_wallet_a, sg_code_id, atu8_msg);
+	debugger;
+	console.log(a_data);
+}
 
-	addMinters
-	removeMinters
-	setMinters
-	changeAdmin
-	setContractStatus
-`;
-
-
-
-// transfer recipient:secret1xcj amount:"10000" 
