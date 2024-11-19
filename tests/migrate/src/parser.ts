@@ -6,6 +6,7 @@ const R_OPERATION = /([\w$_]+)\b\s*(:?)[ \t]*/y;
 const R_BREAK = /-{3,}/y;
 const R_LINE = /([^\n]*)/y;
 const R_CLEAR = /(?:[ \t]*(?:;;[^\n]*)?\n)*/y;
+const R_EOL = /\n+/y;
 
 type Match = RegExpExecArray | null;
 
@@ -32,8 +33,8 @@ export class Parser {
 	protected _s_method = '';
 	protected _s_sender = '';
 
-	protected _s_indent_method = '';
-	protected _s_indent_sender = '';
+	protected _nl_indent_method = 0;
+	protected _nl_indent_sender = 0;
 
 	constructor(protected _s_program: string) {
 		this._s_rest = _s_program;
@@ -66,8 +67,6 @@ export class Parser {
 		let m_next: Match;
 
 		if(m_next=this._match(R_LINE)) {
-			this._clear();
-
 			const [, s_line] = m_next;
 
 			const a_parts = s_line.trim().split(/\s+/g);
@@ -96,16 +95,16 @@ export class Parser {
 		}
 	}
 
-	sender(s_method=this._s_method): StatementResult {
+	sender(s_indent: string, s_method=this._s_method): StatementResult {
 		let m_next: Match;
 
 		if(m_next=this._match(R_INDENT)) {
-			const [, s_indent] = m_next;
+			const [, s_indent_local] = m_next;
 
-			const nl_indent = s_indent.length;
+			const nl_indent = (s_indent_local || s_indent).length;
 
 			// sender defined and indented under; args
-			if(this._s_sender && nl_indent > this._s_indent_sender.length) {
+			if(this._s_sender && nl_indent > this._nl_indent_sender) {
 				return this.args();
 			}
 
@@ -117,7 +116,7 @@ export class Parser {
 
 				// set/clear sender context
 				this._s_sender = s_colon? s_sender: '';
-				this._s_indent_sender = s_indent;
+				this._nl_indent_sender = nl_indent;
 
 				// evaluate args
 				return this.args(s_method, s_sender);
@@ -138,12 +137,12 @@ export class Parser {
 			const nl_indent = s_indent.length;
 
 			// sender defined and indented under; args
-			if(this._s_sender && nl_indent > this._s_indent_sender.length) {
+			if(this._s_sender && nl_indent > this._nl_indent_sender) {
 				return this.args();
 			}
 			// method defined and indented under; sender
-			else if(this._s_method && nl_indent > this._s_indent_method.length) {
-				return this.sender();
+			else if(this._s_method && nl_indent > this._nl_indent_method) {
+				return this.sender(s_indent);
 			}
 
 			// operation
@@ -151,14 +150,14 @@ export class Parser {
 				const [, s_method, s_colon] = m_next;
 
 				// clear after token
-				if(s_colon) this._match(R_CLEAR);
+				if(s_colon) this._clear();
 
 				// set/clear method context
 				this._s_method = s_colon? s_method: '';
-				this._s_indent_method = s_indent;
+				this._nl_indent_method = s_indent.length;
 
 				// evaluate
-				return this.sender(s_method);
+				return this.sender(s_indent, s_method);
 			}
 			// break
 			else if(this._match(R_BREAK)) {

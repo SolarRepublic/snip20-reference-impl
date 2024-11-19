@@ -15,11 +15,6 @@ import {Parser} from './parser';
 
 const XG_UINT128_MAX = (1n << 128n) - 1n;
 
-
-/* syntax:
-[action] [sender] [...args]
-*/
-
 let xg_total_supply = 0n;
 
 // preload sSCRT
@@ -59,7 +54,7 @@ const H_FUNCTIONS = {
 		bank(k_sender, -g_args.amount);
 		balance(k_sender, g_args.amount);
 	}, {
-		before: g_args => ({
+		before: (k_eoa, g_args) => ({
 			funds: g_args.amount,
 		}),
 	}),
@@ -125,13 +120,6 @@ const H_FUNCTIONS = {
 };
 
 
-// 
-// const {
-// 	Alice: k_alice,
-// } = [
-// 	'Alice',
-// ].map(async s_alias => await resolve_account_addr(s_alias));
-
 const a_aliases = [
 	'Alice',
 	'Bob',
@@ -139,27 +127,21 @@ const a_aliases = [
 	'David',
 ];
 
-// const g_balance = await queryCosmosBankAllBalances(P_SECRET_LCD, k_wallet_b.addr);
-// debugger;
-// console.log(g_balance);
-// a:  999999999991_950000
-// b: 1_000_000_000_000_000000   1 trillion
-
-async function bank_send(k_wallet: Wallet<'secret'>, a_recipients: WeakSecretAccAddr[]) {
+async function bank_send(k_wallet: Wallet<'secret'>, xg_amount: bigint, a_recipients: WeakSecretAccAddr[]) {
 	const a_msgs: EncodedGoogleProtobufAny[] = [];
 
-	let sg_limit = 40_000n;
+	let sg_limit = 50_000n;
 
 	// seed all accounts with funds for gas
 	for(const sa_recipient of a_recipients) {
 		const atu8_bank = encodeGoogleProtobufAny(
 			SI_MESSAGE_TYPE_COSMOS_BANK_MSG_SEND,
-			encodeCosmosBankMsgSend(k_wallet.addr, sa_recipient, [[`${5_000000n}`, 'uscrt']])
+			encodeCosmosBankMsgSend(k_wallet.addr, sa_recipient, [[`${xg_amount}`, 'uscrt']])
 		);
 
 		a_msgs.push(atu8_bank);
 
-		sg_limit += 4_500n;
+		sg_limit += 5_500n;
 	}
 
 	const [atu8_raw,, si_txn] = await create_and_sign_tx_direct(k_wallet, a_msgs, exec_fees(sg_limit, X_GAS_PRICE), sg_limit);
@@ -189,10 +171,10 @@ for(const k_eoa of a_eoas_genesis) {
 }
 
 // fund all aliases
-await bank_send(k_wallet_a, a_eoas_aliased.map(k => k.address));
+await bank_send(k_wallet_a, 5_000000n, a_eoas_aliased.map(k => k.address));
 
 // fund first 1024 numeric accounts
-await bank_send(k_wallet_b, a_eoas_numeric.map(k => k.address));
+await bank_send(k_wallet_b, 5_000000n, a_eoas_numeric.map(k => k.address));
 
 // sign query permit for all accounts
 await Promise.all([
@@ -202,17 +184,16 @@ await Promise.all([
 	k_eoa.queryPermit = await sign_secret_query_permit(k_eoa.wallet, 'balance', [k_snip_original.addr], ['owner', 'balance']);
 }));
 
-// const g_balance = await queryCosmosBankBalance(k_wallet_a.lcd, k_wallet_a.addr, 'uscrt');
-
-// debugger;
-// console.log(g_balance);
-
 // set or create viewing keys for other accounts
 const s_prog_vks = [
 	...a_aliases,
 	...a_numerics,
 ].map((si, i) => `${i % 2? 'create': 'set'}ViewingKey ${si} ${si}`).join('\n\t');
 
+
+/* syntax:
+[action] [sender] [...args]
+*/
 const s_program = `
 	createViewingKey $a $a
 	deposit $a 100_000_000_000
@@ -233,6 +214,9 @@ const s_program = `
 	---
 
 	transfer $a 100_000_000 Alice
+	transfer $b 100_000_000 Bob
+	transfer $c 100_000_000 Carol
+	transfer $d 100_000_000 David
 
 	---
 

@@ -1,7 +1,8 @@
+import type {Dict, Nilable} from '@blake.regalia/belt';
 import type {CwSecretAccAddr, Wallet, WeakSecretAccAddr} from '@solar-republic/neutrino';
 import type {SecretQueryPermit} from '@solar-republic/types';
 
-import {sha256, text_to_bytes, type Dict, type Nilable} from '@blake.regalia/belt';
+import {sha256, text_to_bytes} from '@blake.regalia/belt';
 import {pubkey_to_bech32} from '@solar-republic/crypto';
 import {sk_to_pk} from '@solar-republic/neutrino';
 
@@ -29,16 +30,16 @@ export class ExternallyOwnedAccount {
 		return h_cached_aliases[s_alias] ??= await (async() => {
 			// privte key
 			const atu8_sk = '$' === s_alias[0]
-				// generate secret key
-				? await sha256(text_to_bytes(s_alias))
 				// lookup from vars
-				: H_ACCOUNT_VARS[s_alias];
+				? H_ACCOUNT_VARS[s_alias.slice(1)]
+				// generate secret key
+				: await sha256(text_to_bytes(s_alias));
 
 			// create wallet
 			const k_wallet = await SecretWallet(atu8_sk);
 
 			// create instance
-			return h_cached_addresses[k_wallet.addr] ??= new ExternallyOwnedAccount(atu8_sk, k_wallet);
+			return h_cached_addresses[k_wallet.addr] ??= new ExternallyOwnedAccount(atu8_sk, k_wallet, s_alias);
 		})();
 	}
 

@@ -3,7 +3,7 @@ import type {ParseSignatureString} from './types';
 import type {EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
 import type {WeakSecretAccAddr, SecretContract, TxResultTuple, CwSecretAccAddr} from '@solar-republic/neutrino';
 
-import {__UNDEFINED, F_IDENTITY, is_number, keys, snake, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
+import {__UNDEFINED, F_IDENTITY, is_number, keys, parse_json_safe, snake, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
 import {broadcast_result, create_and_sign_tx_direct, exec_fees, secret_contract_responses_decrypt} from '@solar-republic/neutrino';
 
 import {X_GAS_PRICE} from './constants';
@@ -33,7 +33,7 @@ export function handler<s_signature extends string>(
 		a_results: TxResultTuple,
 	) => void,
 	g_hooks?: {
-		before?: (g_args: ParseSignatureString<s_signature>['args'] & {
+		before?: (k_eoa: ExternallyOwnedAccount, g_args: ParseSignatureString<s_signature>['args'] & {
 			sender: WeakSecretAccAddr;
 		}) => void;
 	}
@@ -64,6 +64,7 @@ const H_TYPE_CASTERS: Dict<(s_in: string) => any> = {
 
 		return __UNDEFINED;
 	},
+	json: s => parse_json_safe(s) || {},
 } satisfies Dict<(s_in: string) => any>;
 
 export class Evaluator {
@@ -248,6 +249,12 @@ export class Evaluator {
 							// debugger;
 							throw Error(s_error ?? g_meta?.log ?? sx_res);
 						}
+					}
+
+					// was expecting failure
+					if(b_fail) {
+						debugger;
+						throw Error(`Was expecting tx to fail but it succeeded`);
 					}
 
 					// succeeded; each response
