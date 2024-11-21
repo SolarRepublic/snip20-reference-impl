@@ -1,5 +1,6 @@
 import type {JsonObject} from '@blake.regalia/belt';
 import type {WeakSecretAccAddr} from '@solar-republic/neutrino';
+import type { WeakUintStr } from '@solar-republic/types';
 
 type ArgTypeMap = {
 	string: string;
@@ -41,3 +42,13 @@ export type ParseSignatureString<s_sig extends string> = s_sig extends `${infer 
 		args: ParseArgsString<s_sig>;
 		return: JsonObject;
 	};
+
+export type Snip20TxEvent = {
+	from: WeakSecretAccAddr;
+	sender: WeakSecretAccAddr;
+	receiver: WeakSecretAccAddr;
+	coins: {
+		denom: string;
+		amount: WeakUintStr;
+	};
+};

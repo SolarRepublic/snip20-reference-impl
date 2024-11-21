@@ -1,12 +1,13 @@
 import type {Dict, Nilable} from '@blake.regalia/belt';
 import type {CwSecretAccAddr, Wallet, WeakSecretAccAddr} from '@solar-republic/neutrino';
-import type {SecretQueryPermit} from '@solar-republic/types';
+import type {SecretQueryPermit, WeakUintStr} from '@solar-republic/types';
 
 import {sha256, text_to_bytes} from '@blake.regalia/belt';
 import {pubkey_to_bech32} from '@solar-republic/crypto';
 import {sk_to_pk} from '@solar-republic/neutrino';
 
 import {atu8_sk_a, atu8_sk_b, atu8_sk_c, atu8_sk_d, SecretWallet} from './constants';
+import type { Snip20TxEvent } from './types';
 
 type Allowance = {
 	amount: bigint;
@@ -58,6 +59,8 @@ export class ExternallyOwnedAccount {
 
 	allowancesGiven: Record<WeakSecretAccAddr, Allowance> = {};
 	allowancesReceived: Record<WeakSecretAccAddr, Allowance> = {};
+
+	history: Snip20TxEvent[] = [];
 
 	protected constructor(
 		protected _atu8_sk: Uint8Array,

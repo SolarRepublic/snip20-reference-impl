@@ -7,16 +7,16 @@ import type {CwHexLower, CwUint64, WeakUint128Str, WeakUintStr} from '@solar-rep
 import {promisify} from 'node:util';
 import {gunzip} from 'node:zlib';
 
-import {base64_to_bytes, bytes_to_base64, bytes_to_hex, bytes_to_text, cast, sha256} from '@blake.regalia/belt';
+import {__UNDEFINED, base64_to_bytes, bytes, bytes_to_base64, bytes_to_hex, bytes_to_text, cast, sha256, text_to_base64} from '@blake.regalia/belt';
 import {encodeGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
 import {SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_STORE_CODE, SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_INSTANTIATE_CONTRACT, encodeSecretComputeMsgStoreCode, encodeSecretComputeMsgInstantiateContract, encodeSecretComputeMsgMigrateContract, SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_MIGRATE_CONTRACT} from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/msg';
 import {querySecretComputeCode, querySecretComputeCodeHashByCodeId, querySecretComputeCodes, querySecretComputeContractInfo} from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
-import {random_bytes} from '@solar-republic/crypto';
+import {bech32_decode, random_bytes} from '@solar-republic/crypto';
 import {SecretContract, SecretWasm, TendermintEventFilter, broadcast_result, create_and_sign_tx_direct, exec_fees, random_32} from '@solar-republic/neutrino';
 
-import {X_GAS_PRICE, P_SECRET_LCD, P_SECRET_RPC, k_wallet_a, P_MAINNET_LCD} from './constants';
+import {X_GAS_PRICE, P_SECRET_LCD, P_SECRET_RPC, k_wallet_a, P_MAINNET_LCD, k_wallet_admin} from './constants';
 
 export const K_TEF_LOCAL = await TendermintEventFilter(P_SECRET_RPC);
 
@@ -112,6 +112,7 @@ export async function instantiate_contract(k_wallet: Wallet, sg_code_id: WeakUin
 	// @ts-expect-error imported types versioning
 	const atu8_body = await k_wasm.encodeMsg(g_hash!.code_hash, h_init_msg);
 
+	// encode instantiation message
 	const [xc_code, sx_res, g_meta, atu8_data, h_events] = await exec(k_wallet, encodeGoogleProtobufAny(
 		SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_INSTANTIATE_CONTRACT,
 		encodeSecretComputeMsgInstantiateContract(
@@ -119,7 +120,10 @@ export async function instantiate_contract(k_wallet: Wallet, sg_code_id: WeakUin
 			null,
 			sg_code_id,
 			h_init_msg['name'] as string,
-			atu8_body
+			atu8_body,
+			__UNDEFINED,
+			__UNDEFINED,
+			k_wallet.addr
 		)
 	), 10_000_000n);
 
@@ -206,7 +210,7 @@ export async function preload_original_contract(
 	console.log('Code ID: '+sg_code_id);
 
 	// instantiate
-	const sa_snip = await instantiate_contract(k_wallet_a, sg_code_id, {
+	const sa_snip = await instantiate_contract(k_wallet, sg_code_id, {
 		name: 'original_'+bytes_to_base64(random_bytes(6)),
 		symbol: 'TKN',
 		decimals: 6,

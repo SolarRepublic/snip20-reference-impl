@@ -1,14 +1,16 @@
+import type {Snip20, Snip24} from '@solar-republic/contractor';
+import type {SecretContract} from '@solar-republic/neutrino';
+
 import {readFileSync} from 'node:fs';
 
-import {bigint_greater, bigint_lesser, MutexPool} from '@blake.regalia/belt';
+import {__UNDEFINED, bigint_greater, bigint_lesser, MutexPool} from '@blake.regalia/belt';
 
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
-import {querySecretComputeCodeHashByCodeId} from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
 import {query_secret_contract, SecretWasm, sign_secret_query_permit} from '@solar-republic/neutrino';
 
-import {k_wallet_a, k_wallet_admin, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
+import {k_wallet_a, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
 import {migrate_contract, preload_original_contract, upload_code} from './contract';
 import {bank, balance, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
@@ -22,7 +24,8 @@ let xg_total_supply = 0n;
 const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
 
 // preload sSCRT
-const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_admin);
+const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_a);
+const k_snip_migrated = k_snip_original as unknown as SecretContract<Snip24>;
 
 /*
 available sSCRT methods:
@@ -40,6 +43,31 @@ available sSCRT methods:
 	`change_admin`,
 	`set_contract_status`
 */
+
+function transfer_from(
+	k_sender: ExternallyOwnedAccount,
+	k_recipient: ExternallyOwnedAccount,
+	xg_amount: bigint,
+	k_from: ExternallyOwnedAccount=k_sender
+) {
+	balance(k_from, -xg_amount);
+	balance(k_recipient, xg_amount);
+
+	const g_event = {
+		from: k_from.address,
+		sender: k_sender.address,
+		receiver: k_recipient.address,
+		coins: {
+			denom: 'TKN',
+			amount: `${xg_amount}` as const,
+		},
+	};
+
+	k_from.history.push(g_event);
+	k_recipient.history.push(g_event);
+
+	if(k_from !== k_sender) k_sender.history.push(g_event);
+}
 
 /**
  * suite handlers for tracking and double checking expected states in contract
@@ -68,22 +96,19 @@ const H_FUNCTIONS = {
 	}),
 
 	transfer: handler('amount: token, recipient: account', (k_sender, g_args) => {
-		balance(k_sender, -g_args.amount);
-		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
+		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
 	}),
 
 	send: handler('amount: token, recipient: account, msg: json', (k_sender, g_args) => {
-		balance(k_sender, -g_args.amount);
-		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
+		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
 	}),
+
 	transferFrom: handler('amount: token, owner: account, recipient: account', (k_sender, g_args) => {
-		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
-		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
+		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount, ExternallyOwnedAccount.at(g_args.owner));
 	}),
 
 	sendFrom: handler('amount: token, owner: account, recipient: account, msg: json', (k_sender, g_args) => {
-		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
-		balance(ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
+		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount, ExternallyOwnedAccount.at(g_args.owner));
 	}),
 
 	increaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
@@ -134,7 +159,8 @@ const a_aliases = [
 ];
 
 // numeric accounts
-const a_numerics = Array(1024).fill(0).map((w, i) => `a${i}`);
+const nl_nums = 128;
+const a_numerics = Array(nl_nums).fill(0).map((w, i) => `a${i}`);
 
 // instantiate EOAs for all accounts
 const a_eoas_genesis = await Promise.all(a_genesis.map(s => ExternallyOwnedAccount.fromAlias(s)));
@@ -145,7 +171,7 @@ const a_eoas_numeric = await Promise.all(a_numerics.map(s => ExternallyOwnedAcco
 const a_eoas = [...a_eoas_genesis, ...a_eoas_aliased, ...a_eoas_numeric];
 
 // determine how much uscrt each genesis account actually has
-for(const k_eoa of a_eoas_genesis) {
+for(const k_eoa of a_eoas) {
 	const [,, g_bank] = await queryCosmosBankBalance(P_SECRET_LCD, k_eoa.address, 'uscrt');
 	bank(k_eoa, BigInt(g_bank?.balance?.amount ?? '0'));
 }
@@ -163,6 +189,16 @@ await Promise.all([
 ].map(async(k_eoa) => {
 	k_eoa.queryPermit = await sign_secret_query_permit(k_eoa.wallet, 'balance', [k_snip_original.addr], ['owner', 'balance']);
 }));
+
+
+// transfers
+const s_prog_xfers = `
+	${a_numerics.map((si, i) => `transfer $d ${nl_nums + 2} ${si}`).join('\n\t')}
+	---
+	${a_numerics.map((si, i) => `transfer ${si} ${i+1} a${(i+1) % nl_nums}`).join('\n\t')}
+	---
+	${a_numerics.map((si, i) => `redeem ${si} ${i+1}`).join('\n\t')}
+`;
 
 // set or create viewing keys for other accounts
 const s_prog_vks = [
@@ -233,12 +269,14 @@ const s_program = `
 
 	increaseAllowance:
 		Alice:
+			1 Alice
 			10 Bob
 			2 Carol
 			1 David
 	
 	decreaseAllowance:
 		Alice:
+			0 Alice
 			2 Bob
 			10 Carol
 			1 David
@@ -252,6 +290,9 @@ const s_program = `
 	---
 
 	transferFrom:
+		Alice:
+			1 Alice Alice
+
 		Bob:
 			8 Alice Carol
 			0 Carol David
@@ -275,6 +316,12 @@ const s_program = `
 		Carol 1
 		David 900_000_000_000  **fail insufficient funds
 
+	---
+
+	${s_prog_xfers}
+
+	---
+
 	${s_prog_vks}
 `;
 
@@ -288,49 +335,99 @@ const k_evaluator = new Evaluator(H_FUNCTIONS);
 // evaluate program
 await k_evaluator.evaluate(k_parser, k_snip_original);
 
-// concurrency
-const kl_queries = MutexPool(8);
+// validate state
+async function validate_state(b_premigrate=false) {
+	// concurrency
+	const kl_queries = MutexPool(8);
 
-// each eoa in batches
-await Promise.all(a_eoas.map(k_eoa => kl_queries.use(async() => {
-	// destructure eoa
-	const {
-		bank: xg_bank,
-		balance: xg_balance,
-		address: sa_owner,
-		alias: s_alias,
-	} = k_eoa;
-
-	// resolve
-	const [[,, g_bank], a_results] = await Promise.all([
-		// query bank module
-		queryCosmosBankBalance(P_SECRET_LCD, sa_owner, 'uscrt'),
-
-		// query contract balance
-		query_secret_contract(k_snip_original, 'balance', {
+	// each eoa in batches
+	await Promise.all(a_eoas.map(k_eoa => kl_queries.use(async() => {
+		// destructure eoa
+		const {
+			bank: xg_bank,
+			balance: xg_balance,
 			address: sa_owner,
-		}, k_eoa.viewingKey),
-	]);
+			alias: s_alias,
+			history: a_events,
+		} = k_eoa;
 
-	// assert bank balances match
-	if(`${xg_bank}` !== g_bank?.balance?.amount) {
-		throw Error(`Bank discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_bank} but bank module reports ${g_bank?.balance?.amount}`);
-	}
+		// resolve
+		const [[,, g_bank], [g_balance], [g_history]] = await Promise.all([
+			// query bank module
+			b_premigrate? queryCosmosBankBalance(P_SECRET_LCD, sa_owner, 'uscrt'): [],
 
-	// detuple results
-	const [g_balance] = a_results;
+			// query contract balance
+			query_secret_contract(k_snip_original, 'balance', {
+				address: sa_owner,
+			}, k_eoa.viewingKey),
 
-	// assert that the SNIP balances are identical
-	if(`${xg_balance}` !== g_balance?.amount) {
-		debugger;
-		throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}`);
-	}
+			// query transfer history
+			b_premigrate
+				? query_secret_contract(k_snip_original, 'transfer_history', {
+					address: sa_owner,
+					page_size: 2048,
+				}, k_eoa.viewingKey)
+				: query_secret_contract(k_snip_migrated, 'transaction_history', {
+					address: sa_owner,
+					page_size: 2048,
+				}, k_eoa.viewingKey),
+		]);
 
-	// TODO: query allowances
-})));
+		// assert bank balances match
+		if(b_premigrate && `${xg_bank}` !== g_bank?.balance?.amount) {
+			throw Error(`Bank discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_bank} but bank module reports ${g_bank?.balance?.amount}`);
+		}
 
-//
-console.log(`✅ Verified ${a_eoas.length} bank balances and SNIP balances`);
+		// assert that the SNIP balances are identical
+		if(`${xg_balance}` !== g_balance?.amount) {
+			debugger;
+			throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}`);
+		}
+
+		// pre-migrate
+		if(b_premigrate) {
+			// clone events list
+			const a_events_clone = a_events.slice();
+
+			// each event in history
+			for(const g_tx of g_history!.txs as Snip20['queries']['transfer_history']['merged']['response']['txs']) {
+				// find event
+				const i_event = a_events_clone.findIndex(g => g.sender === g_tx.sender
+					&& g.from === g_tx.from
+					&& g.receiver === g_tx.receiver
+					&& g.coins.denom === g_tx.coins.denom
+					&& g.coins.amount === g_tx.coins.amount);
+
+				// not found
+				if(i_event < 0) {
+					debugger;
+					throw Error(`Failed to find transfer event locally`);
+				}
+
+				// remove
+				a_events_clone.splice(i_event, 1);
+			}
+
+			// extra event
+			if(a_events_clone.length) {
+				throw Error(`Suite recorded transfer event that was not found in contract`);
+			}
+		}
+		// post-migrate
+		else {
+			debugger;
+		}
+
+
+		// TODO: query allowances
+	})));
+
+	//
+	console.log(`✅ Verified ${a_eoas.length} ${b_premigrate? 'bank balances and ': ''}SNIP balances`);
+}
+
+// validate contract state
+await validate_state(true);
 
 // read WASM file
 const atu8_wasm = readFileSync(SR_LOCAL_WASM);
@@ -353,5 +450,8 @@ const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
 	const a_data = await migrate_contract(k_snip_original.addr, k_wallet_a, sg_code_id, atu8_msg);
 	debugger;
 	console.log(a_data);
+
+	// check balances
+	await validate_state(false);
 }
 
