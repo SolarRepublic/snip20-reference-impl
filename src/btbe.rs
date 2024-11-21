@@ -13,7 +13,7 @@ use secret_toolkit_crypto::hkdf_sha_256;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::{dwb::TX_NODES, old_state::{self, clear_old_balance}, state::{safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
+use crate::{dwb::TX_NODES, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
 use crate::dwb::{amount_u64, DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
@@ -552,9 +552,9 @@ pub fn merge_dwb_entry(
         node.set_and_save_bucket(storage, bucket)?;
     } else {
         // :: migration start
-        let old_balance = old_state::get_old_balance(storage, &dwb_entry.recipient()?);
+        let old_balance = legacy_state::get_old_balance(storage, &dwb_entry.recipient()?);
 
-        if old_balance > 0 {
+        if let Some(old_balance) = old_balance {
             // get the denom. we could pass this as a parameter since we've already read it from storagae earlier, 
             // but this is simpler to implement for an uncommon operation
             let denom = CONFIG.load(storage)?.symbol;
@@ -568,11 +568,11 @@ pub fn merge_dwb_entry(
             // add migration tx id to the dwb_entry before the incoming tx
             dwb_entry.add_tx_node(storage, migration_tx_id)?;
             // add in the old balance to the dwb_entry amount
-            let mut amount = dwb_entry.amount()?;
-            safe_add_u64(&mut amount, old_balance as u64);
-            dwb_entry.set_amount(amount)?;
+            let mut amount = dwb_entry.amount()? as u128;
+            safe_add(&mut amount, old_balance);
+            dwb_entry.set_amount(amount as u64)?;
             // clear the old balance, so migration only happens once
-            clear_old_balance(storage, &dwb_entry.recipient()?);
+            legacy_state::clear_old_balance(storage, &dwb_entry.recipient()?);
         }
         // :: migration end
 

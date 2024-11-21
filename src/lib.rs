@@ -13,5 +13,6 @@ mod strings;
 mod transaction_history;
 mod notifications;
 
-mod old_state;
-mod old_append_store;
+mod legacy_state;
+mod legacy_append_store;
+mod legacy_viewing_key;
