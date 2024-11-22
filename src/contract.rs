@@ -658,7 +658,13 @@ pub fn query_transactions(
         if head_node_index > 0 {
             let head_node = TX_NODES
                 .add_suffix(&head_node_index.to_be_bytes())
-                .load(deps.storage)?;
+                .load(deps.storage);
+            // begin testing
+            if head_node.is_err() {
+                return Err(StdError::generic_err("tx node load error case 1"));
+            }
+            let head_node = head_node?;
+            // end testing
             txs_in_dwb = head_node.to_vec(deps.storage, deps.api)?;
         }
     }
@@ -692,7 +698,13 @@ pub fn query_transactions(
                     let tx_bundle = entry.get_tx_bundle_at(deps.storage, bundle_idx.clone())?;
                     let head_node = TX_NODES
                         .add_suffix(&tx_bundle.head_node.to_be_bytes())
-                        .load(deps.storage)?;
+                        .load(deps.storage);
+                    // begin testing
+                    if head_node.is_err() {
+                        return Err(StdError::generic_err("tx node load error case 2"));
+                    }
+                    let head_node = head_node?;
+                    // end testing
                     let list_len = tx_bundle.list_len as u32;
                     if txs_left <= list_len {
                         txs.extend_from_slice(
@@ -728,7 +740,13 @@ pub fn query_transactions(
 
             let head_node = TX_NODES
                 .add_suffix(&tx_bundle.head_node.to_be_bytes())
-                .load(deps.storage)?;
+                .load(deps.storage);
+            // begin testing
+            if head_node.is_err() {
+                return Err(StdError::generic_err("tx node load error case 3"));
+            }
+            let head_node = head_node?;
+            // end testing
             let list_len = tx_bundle.list_len as u32;
             if start_at + txs_left <= list_len {
                 // this first bundle has all the txs we need
