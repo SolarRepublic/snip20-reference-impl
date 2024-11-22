@@ -772,9 +772,9 @@ pub fn query_transactions(
                             if head_node.is_err() {
                                 return Err(StdError::generic_err(format!(
                                     "entry address: {:?}\nentry balance: {:?}\nentry history len: {:?}\nbundle index: {}\ntx bundle head node: {}\ntx_bundle list len: {}\ntx bundle offset:{}\n", 
-                                    entry.address(),
-                                    entry.balance(),
-                                    entry.history_len(),
+                                    entry.address()?,
+                                    entry.balance()?,
+                                    entry.history_len()?,
                                     bundle_idx,
                                     tx_bundle.head_node,
                                     tx_bundle.list_len,
