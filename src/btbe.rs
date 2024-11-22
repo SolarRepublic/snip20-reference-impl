@@ -519,6 +519,9 @@ pub fn merge_dwb_entry(
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
     block: &BlockInfo, // added for migration
 ) -> StdResult<()> {
+    if dwb_entry.list_len()? == 0 {
+        return Err(StdError::generic_err("dwb entry list length is 0 when calling merge_dwb_entry"));
+    }
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("#merge_dwb_entry.1");
 
