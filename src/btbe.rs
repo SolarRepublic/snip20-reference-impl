@@ -113,7 +113,7 @@ impl StoredEntry {
         &self.0[..BTBE_BUCKET_ADDRESS_BYTES]
     }
 
-    fn address(&self) -> StdResult<CanonicalAddr> {
+    pub fn address(&self) -> StdResult<CanonicalAddr> {
         let result = CanonicalAddr::try_from(self.address_slice())
             .or(Err(StdError::generic_err("Get bucket address error")))?;
         Ok(result)
