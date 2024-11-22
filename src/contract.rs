@@ -2047,7 +2047,7 @@ fn use_allowance(
 ) -> StdResult<()> {
     let mut allowance = AllowancesStore::load(storage, owner, spender);
 
-    if allowance.is_expired_at(&env.block) {
+    if allowance.is_expired_at(&env.block) || allowance.amount == 0 {
         return Err(insufficient_allowance(0, amount));
     }
     if let Some(new_allowance) = allowance.amount.checked_sub(amount) {
