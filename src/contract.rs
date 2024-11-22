@@ -767,7 +767,13 @@ pub fn query_transactions(
                                 entry.get_tx_bundle_at(deps.storage, bundle_idx.clone())?;
                             let head_node = TX_NODES
                                 .add_suffix(&tx_bundle.head_node.to_be_bytes())
-                                .load(deps.storage)?;
+                                .load(deps.storage);
+                            // begin testing
+                            if head_node.is_err() {
+                                return Err(StdError::generic_err("tx node load error case 4"));
+                            }
+                            let head_node = head_node?;
+                            // end testing
                             let list_len = tx_bundle.list_len as u32;
                             if txs_left <= list_len {
                                 txs.extend_from_slice(
