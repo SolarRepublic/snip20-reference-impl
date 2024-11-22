@@ -43,10 +43,41 @@ export type ParseSignatureString<s_sig extends string> = s_sig extends `${infer 
 		return: JsonObject;
 	};
 
-export type Snip20TxEvent = {
+export type Snip20TransferEvent = {
 	from: WeakSecretAccAddr;
 	sender: WeakSecretAccAddr;
 	receiver: WeakSecretAccAddr;
+	coins: {
+		denom: string;
+		amount: WeakUintStr;
+	};
+};
+
+export type Snip250TxEvent = {
+	action: {
+		transfer: {
+			from: WeakSecretAccAddr;
+			sender: WeakSecretAccAddr;
+			recipient: WeakSecretAccAddr;
+		};
+	} | {
+		mint: {
+			minter: WeakSecretAccAddr;
+			recipient: WeakSecretAccAddr;
+		};
+	} | {
+		burn: {
+			burner: WeakSecretAccAddr;
+			owner: WeakSecretAccAddr;
+		};
+	} | {
+		deposit: {};
+	} | {
+		redeem: {};
+	} | {
+		migration: {};
+	};
+
 	coins: {
 		denom: string;
 		amount: WeakUintStr;

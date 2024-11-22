@@ -93,7 +93,7 @@ export class Evaluator {
 
 		// each pending order
 		await Promise.all([..._hm_pending.entries()].map(async([k_eoa, [a_execs, f_handler]]) => {
-			const xg_limit = 60_000n + (40_000n * BigInt(a_execs.length));
+			const xg_limit = 100_000n + (80_000n * BigInt(a_execs.length));
 
 			const a_fees = exec_fees(xg_limit, X_GAS_PRICE);
 
@@ -162,6 +162,7 @@ export class Evaluator {
 					args: a_args,
 					fail: b_fail,
 					error: s_expect,
+					debug: b_debug,
 				},
 			} = g_command;
 
@@ -278,6 +279,9 @@ export class Evaluator {
 
 						// lookup original args
 						const [,, g_args_app, g_operation] = a_execs[i_msg];
+
+						// debug
+						if(g_operation.debug) debugger;
 
 						// ref method
 						const g_method_local = _h_functions[g_operation.method];

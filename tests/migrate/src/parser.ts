@@ -18,6 +18,7 @@ export type Statement = {
 		args: string[];
 		fail?: boolean;
 		error?: string;
+		debug?: boolean;
 	};
 };
 
@@ -81,6 +82,14 @@ export class Parser {
 				a_parts.splice(i_error);
 			}
 
+			// debug
+			let b_debug = false;
+			const i_debug = a_parts.findIndex(s => s.startsWith('**debug'));
+			if(i_debug >= 0) {
+				b_debug = true;
+				a_parts.splice(i_debug);
+			}
+
 			// compile statement
 			return {
 				type: 'statement',
@@ -89,6 +98,7 @@ export class Parser {
 					sender: s_sender,
 					args: a_parts,
 					fail: b_fail,
+					debug: b_debug,
 					error: s_error,
 				},
 			};

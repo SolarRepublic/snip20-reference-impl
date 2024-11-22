@@ -255,8 +255,6 @@ export async function migrate_contract(
 		)
 	), 600_000n);
 
-	debugger;
-
 	if(xc_code) {
 		const s_error = g_meta?.log ?? sx_res;
 

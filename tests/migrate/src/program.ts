@@ -1,14 +1,15 @@
-import type {Snip20, Snip24} from '@solar-republic/contractor';
-import type {SecretContract} from '@solar-republic/neutrino';
+import type {Snip20TransferEvent, Snip250TxEvent} from './types';
+import type {Snip20, Snip20Queries, Snip26, Snip24Executions, Snip24Queries, Snip26Queries, SecretAccAddr} from '@solar-republic/contractor';
+
 
 import {readFileSync} from 'node:fs';
 
-import {__UNDEFINED, bigint_greater, bigint_lesser, MutexPool} from '@blake.regalia/belt';
+import {__UNDEFINED, bigint_greater, bigint_lesser, canonicalize_json, keys, MutexPool, stringify_json} from '@blake.regalia/belt';
 
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
-import {query_secret_contract, SecretWasm, sign_secret_query_permit} from '@solar-republic/neutrino';
+import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit} from '@solar-republic/neutrino';
 
 import {k_wallet_a, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
 import {migrate_contract, preload_original_contract, upload_code} from './contract';
@@ -25,7 +26,17 @@ const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
 
 // preload sSCRT
 const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_a);
-const k_snip_migrated = k_snip_original as unknown as SecretContract<Snip24>;
+let k_snip_migrated: SecretContract<{
+	config: Snip26['config'];
+	executions: Snip24Executions & {};
+	queries: Snip26Queries & {
+		legacy_transfer_history: Snip20Queries['transfer_history'];
+	};
+}>;
+
+// native denom
+let s_native_denom = 'uscrt';
+
 
 /*
 available sSCRT methods:
@@ -50,23 +61,61 @@ function transfer_from(
 	xg_amount: bigint,
 	k_from: ExternallyOwnedAccount=k_sender
 ) {
+	// migrated
+	if(k_snip_migrated) {
+		// init migration
+		k_from.initTx();
+		k_recipient.initTx();
+
+		// create event
+		const g_event: Snip250TxEvent = {
+			action: {
+				transfer: {
+					from: k_from.address,
+					sender: k_sender.address,
+					recipient: k_recipient.address,
+				},
+			},
+			coins: {
+				denom: 'TKN',
+				amount: `${xg_amount}` as const,
+			},
+		};
+
+		// add to histories
+		k_from.txs.push(g_event);
+		k_recipient.txs.push(g_event);
+
+		// add to sender history as well
+		if(k_from !== k_sender) {
+			k_sender.initTx();
+			k_sender.txs.push(g_event);
+		}
+	}
+	// legacy
+	else {
+		// create legacy event
+		const g_event: Snip20TransferEvent = {
+			from: k_from.address,
+			sender: k_sender.address,
+			receiver: k_recipient.address,
+			coins: {
+				denom: 'TKN',
+				amount: `${xg_amount}` as const,
+			},
+		};
+
+		// add to histories
+		k_from.transfers.push(g_event);
+		k_recipient.transfers.push(g_event);
+
+		// add to sender history as well
+		if(k_from !== k_sender) k_sender.transfers.push(g_event);
+	}
+
+	// update balances
 	balance(k_from, -xg_amount);
 	balance(k_recipient, xg_amount);
-
-	const g_event = {
-		from: k_from.address,
-		sender: k_sender.address,
-		receiver: k_recipient.address,
-		coins: {
-			denom: 'TKN',
-			amount: `${xg_amount}` as const,
-		},
-	};
-
-	k_from.history.push(g_event);
-	k_recipient.history.push(g_event);
-
-	if(k_from !== k_sender) k_sender.history.push(g_event);
 }
 
 /**
@@ -82,6 +131,23 @@ const H_FUNCTIONS = {
 	}),
 
 	deposit: handler('amount: token', (k_sender, g_args) => {
+		// post-migration
+		if(k_snip_migrated) {
+			k_sender.initTx();
+
+			// add tx to history
+			k_sender.txs.push({
+				action: {
+					deposit: {},
+				},
+				coins: {
+					denom: s_native_denom,
+					amount: `${g_args.amount}`,
+				},
+			});
+		}
+
+		// update balances
 		bank(k_sender, -g_args.amount);
 		balance(k_sender, g_args.amount);
 	}, {
@@ -91,6 +157,23 @@ const H_FUNCTIONS = {
 	}),
 
 	redeem: handler('amount: token', (k_sender, g_args) => {
+		// post-migration
+		if(k_snip_migrated) {
+			k_sender.initTx();
+
+			// add tx to history
+			k_sender.txs.push({
+				action: {
+					redeem: {},
+				},
+				coins: {
+					denom: 'TKN',
+					amount: `${g_args.amount}`,
+				},
+			});
+		}
+
+		// update balances
 		balance(k_sender, -g_args.amount);
 		bank(k_sender, g_args.amount);
 	}),
@@ -117,10 +200,12 @@ const H_FUNCTIONS = {
 		const sa_sender = k_sender.address;
 		const g_prev = h_given[sa_spender];
 
-		h_given[sa_spender] = h_recvd[sa_sender] = {
-			amount: bigint_lesser(XG_UINT128_MAX, (!g_prev?.expiration || g_prev.expiration < Date.now()? 0n: g_prev.amount) + xg_amount),
-			expiration: n_exp,
-		};
+		if(k_snip_migrated) {
+			h_given[sa_spender] = h_recvd[sa_sender] = {
+				amount: bigint_lesser(XG_UINT128_MAX, (!g_prev?.expiration || g_prev.expiration < Date.now()? 0n: g_prev.amount) + xg_amount),
+				expiration: n_exp,
+			};
+		}
 	}),
 
 	decreaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
@@ -129,18 +214,60 @@ const H_FUNCTIONS = {
 		const sa_sender = k_sender.address;
 		const g_prev = h_given[sa_spender];
 
-		h_given[sa_sender] = h_recvd[sa_sender] = {
-			amount: bigint_greater(0n, (!g_prev?.expiration || g_prev.expiration < Date.now()? 0n: g_prev.amount) - xg_amount),
-			expiration: n_exp,
-		};
+		if(k_snip_migrated) {
+			h_given[sa_sender] = h_recvd[sa_sender] = {
+				amount: bigint_greater(0n, (!g_prev?.expiration || g_prev.expiration < Date.now()? 0n: g_prev.amount) - xg_amount),
+				expiration: n_exp,
+			};
+		}
 	}),
 
 	burn: handler('amount: token', (k_sender, g_args) => {
+		// post-migration
+		if(k_snip_migrated) {
+			k_sender.initTx();
+
+			// add tx to history
+			k_sender.txs.push({
+				action: {
+					burn: {
+						burner: k_sender.address,
+						owner: k_sender.address,
+					},
+				},
+				coins: {
+					denom: 'TKN',
+					amount: `${g_args.amount}`,
+				},
+			});
+		}
+
+		// update balances
 		balance(k_sender, -g_args.amount);
 		xg_total_supply -= g_args.amount;
 	}),
 
 	burnFrom: handler('amount: token, owner: account', (k_sender, g_args) => {
+		// post-migration
+		if(k_snip_migrated) {
+			k_sender.initTx();
+
+			// add tx to history
+			k_sender.txs.push({
+				action: {
+					burn: {
+						burner: k_sender.address,
+						owner: g_args.owner,
+					},
+				},
+				coins: {
+					denom: 'TKN',
+					amount: `${g_args.amount}`,
+				},
+			});
+		}
+
+		// update balances
 		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
 		xg_total_supply -= g_args.amount;
 	}),
@@ -295,7 +422,7 @@ const s_program = `
 
 		Bob:
 			8 Alice Carol
-			0 Carol David
+			0 Carol David       **debugger
 			1000 Alice David    **fail insufficient allowance
 
 	increaseAllowance:
@@ -325,20 +452,21 @@ const s_program = `
 	${s_prog_vks}
 `;
 
+{
+	// parse program
+	const k_parser = new Parser(s_program);
 
-// parse program
-const k_parser = new Parser(s_program);
+	// prep evaluator
+	const k_evaluator = new Evaluator(H_FUNCTIONS);
 
-// prep evaluator
-const k_evaluator = new Evaluator(H_FUNCTIONS);
-
-// evaluate program
-await k_evaluator.evaluate(k_parser, k_snip_original);
+	// evaluate program
+	await k_evaluator.evaluate(k_parser, k_snip_original);
+}
 
 // validate state
 async function validate_state(b_premigrate=false) {
 	// concurrency
-	const kl_queries = MutexPool(8);
+	const kl_queries = MutexPool(2);
 
 	// each eoa in batches
 	await Promise.all(a_eoas.map(k_eoa => kl_queries.use(async() => {
@@ -348,16 +476,16 @@ async function validate_state(b_premigrate=false) {
 			balance: xg_balance,
 			address: sa_owner,
 			alias: s_alias,
-			history: a_events,
+			transfers: a_events,
 		} = k_eoa;
 
 		// resolve
-		const [[,, g_bank], [g_balance], [g_history]] = await Promise.all([
+		const [[,, g_bank], a4_balance, a4_history] = await Promise.all([
 			// query bank module
 			b_premigrate? queryCosmosBankBalance(P_SECRET_LCD, sa_owner, 'uscrt'): [],
 
 			// query contract balance
-			query_secret_contract(k_snip_original, 'balance', {
+			query_secret_contract(b_premigrate? k_snip_original: k_snip_migrated, 'balance', {
 				address: sa_owner,
 			}, k_eoa.viewingKey),
 
@@ -367,7 +495,7 @@ async function validate_state(b_premigrate=false) {
 					address: sa_owner,
 					page_size: 2048,
 				}, k_eoa.viewingKey)
-				: query_secret_contract(k_snip_migrated, 'transaction_history', {
+				: query_secret_contract(k_snip_migrated, 'legacy_transfer_history', {
 					address: sa_owner,
 					page_size: 2048,
 				}, k_eoa.viewingKey),
@@ -378,52 +506,151 @@ async function validate_state(b_premigrate=false) {
 			throw Error(`Bank discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_bank} but bank module reports ${g_bank?.balance?.amount}`);
 		}
 
+		// detuple balance
+		const [g_balance] = a4_balance;
+
 		// assert that the SNIP balances are identical
 		if(`${xg_balance}` !== g_balance?.amount) {
 			debugger;
-			throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}`);
+			throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}; ${a4_balance}`);
 		}
 
-		// pre-migrate
-		if(b_premigrate) {
-			// clone events list
-			const a_events_clone = a_events.slice();
+		// detuple history result
+		const [g_history] = a4_history as unknown as [Snip20['queries']['transfer_history']['merged']['response']];
 
-			// each event in history
-			for(const g_tx of g_history!.txs as Snip20['queries']['transfer_history']['merged']['response']['txs']) {
-				// find event
-				const i_event = a_events_clone.findIndex(g => g.sender === g_tx.sender
-					&& g.from === g_tx.from
-					&& g.receiver === g_tx.receiver
-					&& g.coins.denom === g_tx.coins.denom
-					&& g.coins.amount === g_tx.coins.amount);
+		// canonicalize and serialize all transfers for this eoa
+		const a_canonical_xfers = k_eoa.transfers.map(g => stringify_json(canonicalize_json(g)));
+
+		// each event in history
+		for(const g_tx of g_history.txs) {
+			// canonicalize and serialize this transfer
+			const si_xfer = stringify_json(canonicalize_json({
+				sender: g_tx.sender,
+				from: g_tx.from,
+				receiver: g_tx.receiver,
+				coins: g_tx.coins,
+			}));
+
+			// find in list
+			const i_xfer = a_canonical_xfers.indexOf(si_xfer);
+
+			// not found
+			if(i_xfer < 0) {
+				debugger;
+				throw Error(`Failed to find transfer event locally`);
+			}
+
+			// delete it
+			a_canonical_xfers.splice(i_xfer, 1);
+		}
+
+		// extra event
+		if(a_canonical_xfers.length) {
+			throw Error(`Suite recorded transfer event that was not found in contract`);
+		}
+
+		// post-migration
+		if(!b_premigrate) {
+			// query tx history
+			const [g_txs] = await query_secret_contract(k_snip_migrated, 'transaction_history', {
+				address: k_eoa.address,
+				page_size: 2048,
+			}, k_eoa.viewingKey);
+
+			// canonicalize and serialize all txs for this eoa
+			const a_canonical_txs = k_eoa.txs.map(g => stringify_json(canonicalize_json(g)));
+
+			// each tx
+			for(const g_tx of g_txs!.txs) {
+				// canonicalize and serialize this tx
+				const si_tx = stringify_json(canonicalize_json({
+					action: g_tx.action,
+					coins: g_tx.coins,
+				}));
+
+				// find in list
+				const i_canonical = a_canonical_txs.indexOf(si_tx);
 
 				// not found
-				if(i_event < 0) {
+				if(i_canonical < 0) {
 					debugger;
-					throw Error(`Failed to find transfer event locally`);
+					throw Error(`Failed to find tx event locally`);
 				}
 
-				// remove
-				a_events_clone.splice(i_event, 1);
+				// delete it
+				a_canonical_txs.splice(i_canonical, 1);
 			}
 
 			// extra event
-			if(a_events_clone.length) {
-				throw Error(`Suite recorded transfer event that was not found in contract`);
+			if(a_canonical_txs.length) {
+				debugger;
+				throw Error(`Suite recorded tx event that was not found in contract`);
+			}
+
+			// allowances
+			{
+				const [[g_given], [g_received]] = await Promise.all([
+					query_secret_contract(k_snip_migrated, 'allowances_given', {
+						address: k_eoa.address,
+						owner: k_eoa.address,
+						page_size: 2048,
+					}, k_eoa.viewingKey),
+
+					query_secret_contract(k_snip_migrated, 'allowances_received', {
+						address: k_eoa.address,
+						spender: k_eoa.address,
+						page_size: 2048,
+					}, k_eoa.viewingKey),
+				]);
+
+				// define pairs
+				const a_pairs = [
+					[g_given?.allowances || [], k_eoa.allowancesGiven, 'spender', 'given'],
+					[g_received?.allowances || [], k_eoa.allowancesReceived, 'owner', 'received'],
+				] as const;
+
+				// each kind
+				for(const [a_allowances, h_allowances, si_other, si_which] of a_pairs) {
+					// assert numbers match
+					if(a_allowances.length !== keys(h_allowances).length) {
+						debugger;
+						throw Error(`Suite recorded ${keys(h_allowances).length} allowances given but contract has ${a_allowances.length}`);
+					}
+
+					// each allowance given
+					for(const g_allowance of a_allowances) {
+						// lookup local allowance
+						const g_allowance_local = h_allowances[g_allowance[si_other as unknown as keyof typeof g_allowance] as SecretAccAddr];
+
+						// not found
+						if(!g_allowance_local) {
+							debugger;
+							throw Error(`No allowances ${si_which} found for ${k_eoa.alias || k_eoa.address} locally`);
+						}
+
+						// destructure local
+						const {
+							amount: xg_amount,
+							expiration: n_expiration,
+						} = g_allowance_local;
+
+						if(g_allowance.allowance !== `${xg_amount}`) {
+							debugger;
+							throw Error(`Different allowance amounts`);
+						}
+
+						// check expiration
+						if(n_expiration && g_allowance.expiration !== n_expiration) {
+							throw Error(`Different allowance expirations`);
+						}
+					}
+				}
 			}
 		}
-		// post-migrate
-		else {
-			debugger;
-		}
-
-
-		// TODO: query allowances
 	})));
 
 	//
-	console.log(`✅ Verified ${a_eoas.length} ${b_premigrate? 'bank balances and ': ''}SNIP balances`);
+	console.log(`✅ Verified ${a_eoas.length} transfer histories, ${b_premigrate? 'transaction histories, bank balances and ': ''}SNIP balances`);
 }
 
 // validate contract state
@@ -447,11 +674,31 @@ const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
 
 	// run migration
 	console.debug(`Running migration...`);
-	const a_data = await migrate_contract(k_snip_original.addr, k_wallet_a, sg_code_id, atu8_msg);
-	debugger;
-	console.log(a_data);
+	await migrate_contract(k_snip_original.addr, k_wallet_a, sg_code_id, atu8_msg);
 
-	// check balances
+	// override migrated contract code hash
+	k_snip_migrated = await SecretContract(P_SECRET_LCD, k_snip_original.addr, null, XC_CONTRACT_CACHE_BYPASS);
+
+	// check balances and verify viewing keys still work
+	console.debug(`Validating post-migration state`);
 	await validate_state(false);
+
+	// simulate the same load again
+
+	// parse program
+	const k_parser = new Parser(s_program);
+
+	// prep evaluator
+	const k_evaluator = new Evaluator(H_FUNCTIONS);
+
+	// evaluate program
+	await k_evaluator.evaluate(k_parser, k_snip_migrated);
+
+	debugger;
+
+	// validate
+	await validate_state(false);
+
+	debugger;
 }
 
