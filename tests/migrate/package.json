@@ -23,7 +23,7 @@
     "@solar-republic/contractor": "^0.9.7",
     "@solar-republic/cosmos-grpc": "^0.17.2",
     "@solar-republic/crypto": "^0.2.14",
-    "@solar-republic/neutrino": "^1.7.0-beta.8",
+    "@solar-republic/neutrino": "^1.7.0-beta.10",
     "bignumber.js": "^9.1.2"
   },
   "packageManager": "pnpm@9.0.6+sha1.648f6014eb363abb36618f2ba59282a9eeb3e879"

@@ -64,8 +64,8 @@ function transfer_from(
 	// migrated
 	if(k_snip_migrated) {
 		// init migration
-		k_from.initTx();
-		k_recipient.initTx();
+		k_from.migrate();
+		k_recipient.migrate();
 
 		// create event
 		const g_event: Snip250TxEvent = {
@@ -88,7 +88,7 @@ function transfer_from(
 
 		// add to sender history as well
 		if(k_from !== k_sender) {
-			k_sender.initTx();
+			k_sender.migrate();
 			k_sender.txs.push(g_event);
 		}
 	}
@@ -133,7 +133,7 @@ const H_FUNCTIONS = {
 	deposit: handler('amount: token', (k_sender, g_args) => {
 		// post-migration
 		if(k_snip_migrated) {
-			k_sender.initTx();
+			k_sender.migrate();
 
 			// add tx to history
 			k_sender.txs.push({
@@ -159,7 +159,7 @@ const H_FUNCTIONS = {
 	redeem: handler('amount: token', (k_sender, g_args) => {
 		// post-migration
 		if(k_snip_migrated) {
-			k_sender.initTx();
+			k_sender.migrate();
 
 			// add tx to history
 			k_sender.txs.push({
@@ -209,8 +209,11 @@ const H_FUNCTIONS = {
 	}),
 
 	decreaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
-		const h_given = ExternallyOwnedAccount.at(sa_spender).allowancesGiven;
-		const h_recvd = k_sender.allowancesReceived;
+		// const h_given = ExternallyOwnedAccount.at(sa_spender).allowancesGiven;
+		// const h_recvd = k_sender.allowancesReceived;
+
+		const h_given = k_sender.allowancesGiven;
+		const h_recvd = ExternallyOwnedAccount.at(sa_spender).allowancesReceived;
 		const sa_sender = k_sender.address;
 		const g_prev = h_given[sa_spender];
 
@@ -225,7 +228,7 @@ const H_FUNCTIONS = {
 	burn: handler('amount: token', (k_sender, g_args) => {
 		// post-migration
 		if(k_snip_migrated) {
-			k_sender.initTx();
+			k_sender.migrate();
 
 			// add tx to history
 			k_sender.txs.push({
@@ -250,7 +253,7 @@ const H_FUNCTIONS = {
 	burnFrom: handler('amount: token, owner: account', (k_sender, g_args) => {
 		// post-migration
 		if(k_snip_migrated) {
-			k_sender.initTx();
+			k_sender.migrate();
 
 			// add tx to history
 			k_sender.txs.push({
@@ -270,6 +273,10 @@ const H_FUNCTIONS = {
 		// update balances
 		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
 		xg_total_supply -= g_args.amount;
+	}),
+
+	migrateLegacyAccount: handler('padding: string', (k_sender, g_args) => {
+		k_sender.migrate();
 	}),
 };
 
@@ -333,11 +340,7 @@ const s_prog_vks = [
 	...a_numerics,
 ].map((si, i) => `${i % 2? 'create': 'set'}ViewingKey ${si} ${si}`).join('\n\t');
 
-
-/* syntax:
-[action] [sender] [...args]
-*/
-const s_program = `
+const s_prog_genesis = `
 	createViewingKey $a $a
 	deposit $a 100_000_000_000
 	transfer $a 10_000_000 Alice
@@ -362,6 +365,14 @@ const s_program = `
 	transfer $d 100_000_000 David
 
 	---
+`;
+
+
+/* syntax:
+[action] [sender] [...args]
+*/
+const program = (b_premigrate: boolean) => `
+	${b_premigrate? s_prog_genesis: ''}
 
 	transfer:
 		Alice:
@@ -422,7 +433,7 @@ const s_program = `
 
 		Bob:
 			8 Alice Carol
-			0 Carol David       **debugger
+			0 Carol David       ${b_premigrate? '': '**fail insufficient allowance'}
 			1000 Alice David    **fail insufficient allowance
 
 	increaseAllowance:
@@ -454,7 +465,7 @@ const s_program = `
 
 {
 	// parse program
-	const k_parser = new Parser(s_program);
+	const k_parser = new Parser(program(true));
 
 	// prep evaluator
 	const k_evaluator = new Evaluator(H_FUNCTIONS);
@@ -551,14 +562,22 @@ async function validate_state(b_premigrate=false) {
 
 		// post-migration
 		if(!b_premigrate) {
+			// canonicalize and serialize all txs for this eoa
+			const a_canonical_txs = k_eoa.txs.map(g => stringify_json(canonicalize_json(g)));
+
 			// query tx history
-			const [g_txs] = await query_secret_contract(k_snip_migrated, 'transaction_history', {
+			const a4_history_txs = await query_secret_contract(k_snip_migrated, 'transaction_history', {
 				address: k_eoa.address,
 				page_size: 2048,
 			}, k_eoa.viewingKey);
 
-			// canonicalize and serialize all txs for this eoa
-			const a_canonical_txs = k_eoa.txs.map(g => stringify_json(canonicalize_json(g)));
+			// 
+			if(!a4_history_txs[0]) {
+				debugger;
+			}
+
+			// destructure txs
+			const [g_txs] = a4_history_txs;
 
 			// each tx
 			for(const g_tx of g_txs!.txs) {
@@ -614,7 +633,7 @@ async function validate_state(b_premigrate=false) {
 					// assert numbers match
 					if(a_allowances.length !== keys(h_allowances).length) {
 						debugger;
-						throw Error(`Suite recorded ${keys(h_allowances).length} allowances given but contract has ${a_allowances.length}`);
+						throw Error(`Suite recorded ${keys(h_allowances).length} allowances ${si_which} for ${k_eoa.alias || k_eoa.address} but contract has ${a_allowances.length}`);
 					}
 
 					// each allowance given
@@ -650,7 +669,7 @@ async function validate_state(b_premigrate=false) {
 	})));
 
 	//
-	console.log(`✅ Verified ${a_eoas.length} transfer histories, ${b_premigrate? 'transaction histories, bank balances and ': ''}SNIP balances`);
+	console.log(`✅ Verified ${a_eoas.length} transfer histories, ${b_premigrate? 'bank balances': 'transaction histories, allowances'} and SNIP balances`);
 }
 
 // validate contract state
@@ -684,17 +703,21 @@ const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
 	await validate_state(false);
 
 	// simulate the same load again
+	const k_parser = new Parser(`
+		migrateLegacyAccount David 1
 
-	// parse program
-	const k_parser = new Parser(s_program);
+		transfer Alice 90 Bob
+
+		---
+
+		${program(false)}
+	`);
 
 	// prep evaluator
 	const k_evaluator = new Evaluator(H_FUNCTIONS);
 
 	// evaluate program
 	await k_evaluator.evaluate(k_parser, k_snip_migrated);
-
-	debugger;
 
 	// validate
 	await validate_state(false);

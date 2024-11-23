@@ -88,7 +88,7 @@ export class ExternallyOwnedAccount {
 		return this._s_alias;
 	}
 
-	initTx(): void {
+	migrate(): void {
 		// first tx in post-migration
 		if(!this.txs.length && this.transfers.length) {
 			// add auto-migrate event

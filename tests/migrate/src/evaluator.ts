@@ -120,11 +120,14 @@ export class Evaluator {
 			await f_handler(a_result, a_execs);
 		}));
 
-		// clear
-		_hm_pending.clear();
+		// operations took place
+		if(_hm_pending.size) {
+			// clear
+			_hm_pending.clear();
 
-		// break
-		console.log('---');
+			// break
+			console.log('---');
+		}
 	}
 
 	async evaluate(
@@ -173,7 +176,7 @@ export class Evaluator {
 			const g_args_raw: Dict<any> = {};
 
 			// construct args from params
-			await Promise.all(g_method.params.replace(/\s*=>.*$/, '').split(/\s*,\s*/g).map(async(s_param, i_param) => {
+			await Promise.all(g_method.params.replace(/\s*=>.*$/, '').split(/\s*,\s*/g).filter(F_IDENTITY).map(async(s_param, i_param) => {
 				// split param string
 				const [s_name, s_type] = s_param.split(/\s*:\s*/).map(s => s.trim());
 
@@ -189,7 +192,7 @@ export class Evaluator {
 					debugger;
 					throw Error(`While trying to cast to ${s_type} on ${s_name} := ${a_args[i_param]}: ${e_cast}`);
 				}
-			}));
+			}) ?? []);
 
 			// create eoa
 			const k_eoa = await ExternallyOwnedAccount.fromAlias(si_sender);
