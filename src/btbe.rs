@@ -13,7 +13,7 @@ use secret_toolkit_crypto::hkdf_sha_256;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::{dwb::{constant_time_if_else, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
+use crate::{dwb::{constant_time_if_else, constant_time_if_else_u32, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
 use crate::dwb::{amount_u64, DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
@@ -163,10 +163,20 @@ impl StoredEntry {
         amount_spent: Option<u128>,
     ) -> StdResult<()> {
         let history_len = self.history_len()?;
+
+        // peek at the last tx bundle added (read the dummy one if its void)
+        let empty_history = u32::from(history_len == 0);
+        let bundle_pos = constant_time_if_else_u32(
+             empty_history,
+             0u32,
+             history_len - 1
+        );
+
         if history_len == 0 {
-            return Err(StdError::generic_err(
-                "use `from` to create new entry from dwb_entry",
-            ));
+            return Err(StdError::generic_err(format!(
+                "merging entry; history_len:{}, bundle_pos:{}",
+                history_len, bundle_pos
+            )));
         }
 
         let mut balance = self.balance()?;
@@ -186,13 +196,32 @@ impl StoredEntry {
 
         self.set_balance(balance)?;
 
-        // peek at the last tx bundle added
-        let last_tx_bundle = self.get_tx_bundle_at(storage, history_len - 1)?;
+        let last_tx_bundle_result = self.get_tx_bundle_at(storage, bundle_pos);
+        if last_tx_bundle_result.is_err() {
+            return Err(StdError::generic_err(format!(
+                "last_tx_bundle was not found at bundle_pos:{}; history_len:{}",
+                bundle_pos,
+                history_len
+            )));
+        }
+
+        let last_tx_bundle = last_tx_bundle_result?;
+
+        // calculate the appropriate bundle offset to use
+        let bundle_offset = constant_time_if_else_u32(
+            empty_history,
+            0u32,
+            last_tx_bundle.offset + u32::from(last_tx_bundle.list_len)
+        );
+
+        // create new tx bundle
         let tx_bundle = TxBundle {
             head_node: dwb_entry.head_node()?,
             list_len: dwb_entry.list_len()?,
-            offset: last_tx_bundle.offset + u32::from(last_tx_bundle.list_len),
+            offset: bundle_offset,
         };
+
+        // add to list
         self.push_tx_bundle(storage, &tx_bundle)?;
 
         Ok(())
@@ -251,8 +280,9 @@ impl StoredEntry {
         self.set_tx_bundle_at_unchecked(storage, len, bundle)?;
         // if the head node is null, then add this as a ghost bundle that does not contribute to len of list, 
         // and will be overwritten next time
-        let len_add = constant_time_if_else((bundle.head_node == 0) as u32, 0, 1) as u32;
-        self.set_history_len(len.saturating_add(len_add))?;
+        // let len_add = constant_time_if_else_u32((bundle.head_node == 0) as u32, 0, 1);
+        // self.set_history_len(len.saturating_add(len_add))?;
+        self.set_history_len(len.saturating_add(1))?;
         Ok(())
     }
 }
@@ -513,9 +543,9 @@ pub fn stored_tx_count(storage: &dyn Storage, entry: &Option<StoredEntry>) -> St
     Ok(0)
 }
 
-// merges a dwb entry into the current node's bucket
+// settles a dwb entry into its appropriate bucket
 // `amount_spent` is any required subtraction due to being sender of tx
-pub fn merge_dwb_entry(
+pub fn settle_dwb_entry(
     storage: &mut dyn Storage,
     dwb_entry: &mut DelayedWriteBufferEntry,
     amount_spent: Option<u128>,
@@ -525,8 +555,11 @@ pub fn merge_dwb_entry(
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("#merge_dwb_entry.1");
 
+    // ref the entry's recipient address
+    let address = &dwb_entry.recipient()?;
+
     // locate the node that the given entry belongs in
-    let (mut node, mut node_id, mut bit_pos) = locate_btbe_node(storage, &dwb_entry.recipient()?)?;
+    let (mut node, mut node_id, mut bit_pos) = locate_btbe_node(storage, address)?;
 
     // load that node's current bucket
     let mut bucket = node.bucket(storage)?;
@@ -535,7 +568,7 @@ pub fn merge_dwb_entry(
     let mut bucket_id = node.bucket;
 
     // search for an existing entry
-    if let Some((idx, mut found_entry)) = bucket.constant_time_find_address(&dwb_entry.recipient()?)
+    if let Some((idx, mut found_entry)) = bucket.constant_time_find_address(address)
     {
         // found existing entry
         // merge amount and history from dwb entry
@@ -545,7 +578,7 @@ pub fn merge_dwb_entry(
         #[cfg(feature = "gas_tracking")]
         group1.logf(format!(
             "merged {} into node #{}, bucket #{} at position {} ",
-            dwb_entry.recipient()?,
+            address,
             node_id,
             bucket_id,
             idx
@@ -553,31 +586,35 @@ pub fn merge_dwb_entry(
 
         // save updated bucket to storage
         node.set_and_save_bucket(storage, bucket)?;
-    } else {
-        // :: migration start
-        let old_balance = legacy_state::get_old_balance(storage, &dwb_entry.recipient()?);
+    }
+    // nothing was stored yet
+    else {
+        // lookup old balance
+        let old_balance = legacy_state::get_old_balance(storage, address);
 
-        if let Some(old_balance) = old_balance {
+        // legacy balance still exists
+        if let Some(migrated_balance) = old_balance {
             // get the denom. we could pass this as a parameter since we've already read it from storagae earlier, 
             // but this is simpler to implement for an uncommon operation
             let denom = CONFIG.load(storage)?.symbol;
+
             // add migration to tx history
             let migration_tx_id = store_migration_action(
                 storage, 
-                old_balance, 
+                migrated_balance, 
                 denom, 
                 block
             )?;
-            // add migration tx id to the dwb_entry before the incoming tx
+
+            // add migration tx id to the entry before it settles
             dwb_entry.add_tx_node(storage, migration_tx_id)?;
-            // add in the old balance to the dwb_entry amount
-            let mut amount = dwb_entry.amount()? as u128;
-            safe_add(&mut amount, old_balance);
-            dwb_entry.set_amount(amount as u64)?;
+
+            // add in the migrated balance to the entry amount before it settles
+            dwb_entry.add_amount(migrated_balance)?;
+
             // clear the old balance, so migration only happens once
-            legacy_state::clear_old_balance(storage, &dwb_entry.recipient()?);
+            legacy_state::clear_old_balance(storage, address);
         }
-        // :: migration end
 
         // need to insert new entry
         // create new stored balance entry
@@ -872,7 +909,7 @@ mod tests {
 
             let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-            let _result = merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
+            let _result = settle_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
 
             let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
             assert_eq!(btbe_node_count, 1);
@@ -901,7 +938,7 @@ mod tests {
 
         let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-        let _result = merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
+        let _result = settle_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
 
         let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
         assert_eq!(btbe_node_count, 3);

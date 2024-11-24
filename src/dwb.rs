@@ -6,10 +6,10 @@ use secret_toolkit_crypto::ContractPrng;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::btbe::{merge_dwb_entry, stored_balance};
+use crate::btbe::{settle_dwb_entry, stored_balance};
 use crate::legacy_state;
 use crate::state::{safe_add, safe_add_u64, CONFIG};
-use crate::transaction_history::{ Tx, TRANSACTIONS};
+use crate::transaction_history::{ store_migration_action, Tx, TRANSACTIONS};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
 #[cfg(feature = "gas_tracking")]
@@ -79,6 +79,7 @@ impl DelayedWriteBuffer {
         })
     }
 
+
     /// settles a participant's account who may or may not have an entry in the buffer
     /// gets balance including any amount in the buffer, and then subtracts amount spent in this tx
     pub fn settle_sender_or_owner_account(
@@ -90,12 +91,13 @@ impl DelayedWriteBuffer {
         op_name: &str,
         #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
         block: &BlockInfo, // added for migration
+        is_from_self: bool,
     ) -> StdResult<u128> {
         #[cfg(feature = "gas_tracking")]
         let mut group1 = tracker.group("settle_sender_or_owner_account.1");
 
         // release the address from the buffer
-        let (balance, mut dwb_entry) = self.release_dwb_recipient(store, address)?;
+        let (balance, mut dwb_entry) = self.release_dwb_recipient(store, address, block)?;
 
         #[cfg(feature = "gas_tracking")]
         group1.log("release_dwb_recipient");
@@ -108,6 +110,11 @@ impl DelayedWriteBuffer {
         };
 
         dwb_entry.add_tx_node(store, tx_id)?;
+
+        // *_from action where sender is the owner, repeat the event in history
+        if is_from_self {
+            dwb_entry.add_tx_node(store, tx_id)?;
+        }
 
         #[cfg(feature = "gas_tracking")]
         group1.log("add_tx_node");
@@ -122,7 +129,7 @@ impl DelayedWriteBuffer {
             dwb_entry.amount()?
         ));
 
-        merge_dwb_entry(
+        settle_dwb_entry(
             store,
             &mut dwb_entry,
             Some(amount_spent),
@@ -138,42 +145,62 @@ impl DelayedWriteBuffer {
     /// returns the new balance and the buffer entry
     pub fn release_dwb_recipient(
         &mut self,
-        store: &mut dyn Storage,
+        storage: &mut dyn Storage,
         address: &CanonicalAddr,
+        block: &BlockInfo, // added for migration
     ) -> StdResult<(u128, DelayedWriteBufferEntry)> {
-        // get the address' stored balance
-        let opt_balance = stored_balance(store, address)?;
+        // loookup stored balance
+        let stored_balance_opt = stored_balance(storage, address)?;
 
-        //
-        // :: added for migration 
-        //
-        let mut balance;
-
-        if opt_balance.is_some() { // check if entry is in btbe
-            balance = opt_balance.unwrap();
-        } else {
-            balance = legacy_state::get_old_balance(store, address).unwrap_or_default();
-        }
-        //
-        // :: migration code end
-        //
+        // unwrap amount
+        let mut stored_balance = stored_balance_opt.unwrap_or_default();
 
         // locate the position of the entry in the buffer
         let matched_entry_idx = self.recipient_match(address);
 
         // get the current entry at the matched index (0 if dummy)
-        let entry = self.entries[matched_entry_idx];
+        let mut entry = self.entries[matched_entry_idx];
 
         // create a new entry to replace the released one, giving it the same address to avoid introducing random addresses
         let replacement_entry = DelayedWriteBufferEntry::new(&entry.recipient()?)?;
 
+        // nothing was stored yet
+        if stored_balance_opt.is_none() {
+            // lookup old balance
+            let old_balance = legacy_state::get_old_balance(storage, address);
+
+            // legacy balance still exists
+            if let Some(migrated_balance) = old_balance {
+                // get the denom. we could pass this as a parameter since we've already read it from storagae earlier, 
+                // but this is simpler to implement for an uncommon operation
+                let denom = CONFIG.load(storage)?.symbol;
+
+                // add migration to tx history
+                let migration_tx_id = store_migration_action(
+                    storage, 
+                    migrated_balance, 
+                    denom, 
+                    block
+                )?;
+
+                // add migration tx id to the entry before it settles
+                entry.add_tx_node(storage, migration_tx_id)?;
+
+                // add in the migrated balance to the entry amount before it settles
+                entry.add_amount(migrated_balance)?;
+
+                // clear the old balance, so migration only happens once
+                legacy_state::clear_old_balance(storage, address);
+            }
+        }
+
         // add entry amount to the stored balance for the address (will be 0 if dummy)
-        safe_add(&mut balance, entry.amount()? as u128);
+        safe_add(&mut stored_balance, entry.amount()? as u128);
 
         // overwrite the entry idx with replacement
         self.entries[matched_entry_idx] = replacement_entry;
 
-        Ok((balance, entry))
+        Ok((stored_balance, entry))
     }
 
     // returns matched index for a given address
@@ -286,7 +313,7 @@ impl DelayedWriteBuffer {
         // settle the entry
         let mut dwb_entry = self.entries[actual_settle_index];
     
-        merge_dwb_entry(
+        settle_dwb_entry(
             store,
             &mut dwb_entry,
             None,
@@ -464,7 +491,7 @@ impl DelayedWriteBufferEntry {
 
     // adds some amount to the total amount for all txs in the entry linked list
     // returns: the new amount
-    fn add_amount(&mut self, add_tx_amount: u128) -> StdResult<u64> {
+    pub fn add_amount(&mut self, add_tx_amount: u128) -> StdResult<u64> {
         // change this to safe_add if your coin needs to store amount in buffer as u128 (e.g. 18 decimals)
         let mut amount = self.amount()?;
         let add_tx_amount_u64 = amount_u64(Some(add_tx_amount))?;
@@ -538,6 +565,11 @@ fn constant_time_is_not_zero(value: i32) -> u32 {
 #[inline]
 pub fn constant_time_if_else(condition: u32, then: usize, els: usize) -> usize {
     (then * condition as usize) | (els * (1 - condition as usize))
+}
+
+#[inline]
+pub fn constant_time_if_else_u32(condition: u32, then: u32, els: u32) -> u32 {
+    (then * condition) | (els * (1 - condition))
 }
 
 #[cfg(feature = "gas_tracking")]

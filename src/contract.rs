@@ -20,7 +20,7 @@ use crate::dwb::log_dwb;
 use crate::dwb::{DelayedWriteBuffer, DWB, TX_NODES};
 
 use crate::btbe::{
-    find_start_bundle, initialize_btbe, merge_dwb_entry, stored_balance, stored_entry, stored_tx_count
+    find_start_bundle, initialize_btbe, settle_dwb_entry, stored_balance, stored_entry, stored_tx_count
 };
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::{GasTracker, LoggingExt};
@@ -313,34 +313,35 @@ fn migrate_legacy_account(
     info: MessageInfo
 ) -> StdResult<Response> {
     let sender_raw = deps.api.addr_canonicalize(info.sender.as_str())?;
+
     // get the address' stored balance
-    let opt_balance = stored_balance(deps.storage, &sender_raw)?;
+    let stored_balance = stored_balance(deps.storage, &sender_raw)?;
 
-    let old_balance;
-
-    if opt_balance.is_some() { // check if entry is in btbe
+    // entry is in btbe
+    if stored_balance.is_some() {
         return Err(StdError::generic_err("Account already migrated"));
-    } else {
-        old_balance = legacy_state::get_old_balance(deps.storage, &sender_raw);
     }
+    
+    // lookup old balance
+    let old_balance = legacy_state::get_old_balance(deps.storage, &sender_raw);
 
+    // no entry in legacy balance
     if old_balance.is_none() {
         return Err(StdError::generic_err("No legacy balance"));
     }
-
-    // they might have already been a recipient so let's settle them as if they were a sender/owner in a transfer
 
     // load delayed write buffer
     let mut dwb = DWB.load(deps.storage)?;
 
     // release the address from the buffer
-    let (_dwb_balance, mut dwb_entry) = dwb.release_dwb_recipient(deps.storage, &sender_raw)?;
+    let (_dwb_balance, mut dwb_entry) = dwb.release_dwb_recipient(deps.storage, &sender_raw, &env.block)?;
     dwb_entry.set_recipient(&sender_raw)?;
     
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
-    merge_dwb_entry(
+    // settle entry
+    settle_dwb_entry(
         deps.storage,
         &mut dwb_entry,
         None,
@@ -1553,6 +1554,7 @@ fn try_redeem(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        false,
     )?;
 
     DWB.save(deps.storage, &dwb)?;
@@ -1602,9 +1604,11 @@ fn try_transfer_impl(
     block: &cosmwasm_std::BlockInfo,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
 ) -> StdResult<(Notification<ReceivedNotificationData>, Notification<SpentNotificationData>)> {
+    // canonicalize sender and recipient addresses
     let raw_sender = deps.api.addr_canonicalize(sender.as_str())?;
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
 
+    // perform the transfer from sender to recipient
     let sender_balance = perform_transfer(
         deps.storage,
         rng,
@@ -1615,9 +1619,12 @@ fn try_transfer_impl(
         denom,
         memo,
         block,
+        false,
         #[cfg(feature = "gas_tracking")]
         tracker,
     )?;
+
+    // create the tokens received notification for recipient
     let received_notification = Notification::new(
         recipient.clone(),
         ReceivedNotificationData {
@@ -1626,6 +1633,7 @@ fn try_transfer_impl(
         }
     );
 
+    // create the tokens spent notification for owner
     let spent_notification = Notification::new (
         sender.clone(),
         SpentNotificationData {
@@ -1659,7 +1667,11 @@ fn try_transfer(
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
-    let (received_notification, spent_notification) = try_transfer_impl(
+    // perform the transfer
+    let (
+        received_notification,
+        spent_notification
+    ) = try_transfer_impl(
         &mut deps,
         rng,
         &info.sender,
@@ -1675,6 +1687,7 @@ fn try_transfer(
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("try_transfer.rest");
 
+    // render the tokens received notification
     let received_notification = received_notification.to_txhash_notification(
         deps.api,
         &env,
@@ -1682,6 +1695,7 @@ fn try_transfer(
         Some(NOTIFICATION_BLOCK_SIZE),
     )?;
 
+    // render the tokens spent notification
     let spent_notification = spent_notification.to_txhash_notification(
         deps.api, 
         &env, 
@@ -1735,7 +1749,10 @@ fn try_batch_transfer(
     let mut notifications = vec![];
     for action in actions {
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
-        let (received_notification, spent_notification) = try_transfer_impl(
+        let (
+            received_notification,
+            spent_notification
+        ) = try_transfer_impl(
             &mut deps,
             rng,
             &info.sender,
@@ -1847,7 +1864,10 @@ fn try_send_impl(
     block: &cosmwasm_std::BlockInfo,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
 ) -> StdResult<(Notification<ReceivedNotificationData>, Notification<SpentNotificationData>)> {
-    let (received_notification, spent_notification) = try_transfer_impl(
+    let (
+        received_notification,
+        spent_notification
+    ) = try_transfer_impl(
         deps,
         rng,
         &sender,
@@ -2101,6 +2121,7 @@ fn try_transfer_from_impl(
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
+    // perform the transfer from owner to recipient
     let owner_balance = perform_transfer(
         deps.storage,
         rng,
@@ -2111,10 +2132,12 @@ fn try_transfer_from_impl(
         denom,
         memo,
         &env.block,
+        true,
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
     )?;
 
+    // create tokens received notification for recipient
     let received_notification = Notification::new(
         recipient.clone(),
         ReceivedNotificationData {
@@ -2123,6 +2146,7 @@ fn try_transfer_from_impl(
         }
     );
 
+    // create tokens spent notification for owner
     let spent_notification = Notification::new (
         owner.clone(),
         SpentNotificationData {
@@ -2153,7 +2177,10 @@ fn try_transfer_from(
     let owner = deps.api.addr_validate(owner.as_str())?;
     let recipient = deps.api.addr_validate(recipient.as_str())?;
     let symbol = CONFIG.load(deps.storage)?.symbol;
-    let (received_notification, spent_notification) = try_transfer_from_impl(
+    let (
+        received_notification,
+        spent_notification
+    ) = try_transfer_from_impl(
         &mut deps,
         rng,
         env,
@@ -2208,7 +2235,10 @@ fn try_batch_transfer_from(
     for action in actions {
         let owner = deps.api.addr_validate(action.owner.as_str())?;
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
-        let (received_notification, spent_notification) = try_transfer_from_impl(
+        let (
+            received_notification,
+            spent_notification
+        ) = try_transfer_from_impl(
             &mut deps,
             rng,
             env,
@@ -2277,7 +2307,10 @@ fn try_send_from_impl(
 ) -> StdResult<(Notification<ReceivedNotificationData>, Notification<SpentNotificationData>)> {
     let spender = info.sender.clone();
     let symbol = CONFIG.load(deps.storage)?.symbol;
-    let (received_notification, spent_notification) = try_transfer_from_impl(
+    let (
+        received_notification,
+        spent_notification
+    ) = try_transfer_from_impl(
         deps,
         rng,
         &env,
@@ -2484,7 +2517,9 @@ fn try_burn_from(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        raw_burner == raw_owner,
     )?;
+
     if raw_burner != raw_owner {
         // also settle sender's account
         dwb.settle_sender_or_owner_account(
@@ -2496,6 +2531,7 @@ fn try_burn_from(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
             &env.block,
+            false,
         )?;
     }
 
@@ -2586,7 +2622,9 @@ fn try_batch_burn_from(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
             &env.block,
+            raw_spender == raw_owner,
         )?;
+
         if raw_spender != raw_owner {
             dwb.settle_sender_or_owner_account(
                 deps.storage,
@@ -2597,6 +2635,7 @@ fn try_batch_burn_from(
                 #[cfg(feature = "gas_tracking")]
                 &mut tracker,
                 &env.block,
+                false,
             )?;
         }
 
@@ -2879,6 +2918,7 @@ fn try_burn(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        false,
     )?;
 
     DWB.save(deps.storage, &dwb)?;
@@ -2924,6 +2964,7 @@ fn perform_transfer(
     denom: String,
     memo: Option<String>,
     block: &BlockInfo,
+    is_from_action: bool,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
 ) -> StdResult<u128> {
     #[cfg(feature = "gas_tracking")]
@@ -2953,9 +2994,10 @@ fn perform_transfer(
         #[cfg(feature = "gas_tracking")]
         tracker,
         block,
+        sender == from && is_from_action,
     )?;
 
-    // if this is a *_from action, settle the sender's account, too
+    // if this is a foreign *_from action, settle the sender's account, too
     if sender != from {
         dwb.settle_sender_or_owner_account(
             store,
@@ -2966,6 +3008,7 @@ fn perform_transfer(
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            false,
         )?;
     }
 
@@ -3020,6 +3063,7 @@ fn perform_mint(
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            false,
         )?;
     }
 
