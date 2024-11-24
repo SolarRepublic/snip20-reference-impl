@@ -581,7 +581,7 @@ pub fn merge_dwb_entry(
 
         // need to insert new entry
         // create new stored balance entry
-        let btbe_entry = StoredEntry::from(storage, &dwb_entry.clone(), amount_spent)?;
+        let btbe_entry = StoredEntry::from(storage, &dwb_entry, amount_spent)?;
 
         // load contract's internal secret
         let secret = INTERNAL_SECRET.load(storage)?;
