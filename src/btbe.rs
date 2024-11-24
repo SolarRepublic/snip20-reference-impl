@@ -13,7 +13,7 @@ use secret_toolkit_crypto::hkdf_sha_256;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::{dwb::{constant_time_if_else, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
+use crate::{dwb::{constant_time_if_else, constant_time_if_else_u32, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
 use crate::dwb::{amount_u64, DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
@@ -162,8 +162,8 @@ impl StoredEntry {
         dwb_entry: &DelayedWriteBufferEntry,
         amount_spent: Option<u128>,
     ) -> StdResult<()> {
-        let history_len = self.history_len()?;
-        if history_len == 0 {
+        let history_len_result = self.history_len();
+        if history_len_result.is_err() {
             return Err(StdError::generic_err(
                 "use `from` to create new entry from dwb_entry",
             ));
@@ -186,13 +186,31 @@ impl StoredEntry {
 
         self.set_balance(balance)?;
 
-        // peek at the last tx bundle added
-        let last_tx_bundle = self.get_tx_bundle_at(storage, history_len - 1)?;
+        // peek at the last tx bundle added (read the dummy one if its void)
+        let history_len = history_len_result?;
+        let empty_history = u32::from(history_len == 0);
+        let bundle_pos = constant_time_if_else_u32(
+             empty_history,
+             0u32,
+             history_len - 1
+        );
+        let last_tx_bundle = self.get_tx_bundle_at(storage, bundle_pos)?;
+
+        // calculate the appropriate bundle offset to use
+        let bundle_offset = constant_time_if_else_u32(
+            empty_history,
+            0u32,
+            last_tx_bundle.offset + u32::from(last_tx_bundle.list_len)
+        );
+
+        // create new tx bundle
         let tx_bundle = TxBundle {
             head_node: dwb_entry.head_node()?,
             list_len: dwb_entry.list_len()?,
-            offset: last_tx_bundle.offset + u32::from(last_tx_bundle.list_len),
+            offset: bundle_offset,
         };
+
+        // add to list
         self.push_tx_bundle(storage, &tx_bundle)?;
 
         Ok(())
@@ -581,7 +599,7 @@ pub fn merge_dwb_entry(
 
         // need to insert new entry
         // create new stored balance entry
-        let btbe_entry = StoredEntry::from(storage, &dwb_entry.clone(), amount_spent)?;
+        let btbe_entry = StoredEntry::from(storage, &dwb_entry, amount_spent)?;
 
         // load contract's internal secret
         let secret = INTERNAL_SECRET.load(storage)?;

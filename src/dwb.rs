@@ -540,6 +540,11 @@ pub fn constant_time_if_else(condition: u32, then: usize, els: usize) -> usize {
     (then * condition as usize) | (els * (1 - condition as usize))
 }
 
+#[inline]
+pub fn constant_time_if_else_u32(condition: u32, then: u32, els: u32) -> u32 {
+    (then * condition) | (els * (1 - condition))
+}
+
 #[cfg(feature = "gas_tracking")]
 pub fn log_dwb(storage: &dyn Storage) -> StdResult<Binary> {
     let dwb = DWB.load(storage)?;
