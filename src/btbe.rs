@@ -13,7 +13,7 @@ use secret_toolkit_crypto::hkdf_sha_256;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::{dwb::TX_NODES, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
+use crate::{dwb::{constant_time_if_else, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
 use crate::dwb::{amount_u64, DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
@@ -249,7 +249,10 @@ impl StoredEntry {
     fn push_tx_bundle(&mut self, storage: &mut dyn Storage, bundle: &TxBundle) -> StdResult<()> {
         let len = self.history_len()?;
         self.set_tx_bundle_at_unchecked(storage, len, bundle)?;
-        self.set_history_len(len.saturating_add(1))?;
+        // if the head node is null, then add this as a ghost bundle that does not contribute to len of list, 
+        // and will be overwritten next time
+        let len_add = constant_time_if_else((bundle.head_node == 0) as u32, 0, 1) as u32;
+        self.set_history_len(len.saturating_add(len_add))?;
         Ok(())
     }
 }
@@ -519,9 +522,6 @@ pub fn merge_dwb_entry(
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
     block: &BlockInfo, // added for migration
 ) -> StdResult<()> {
-    if dwb_entry.list_len()? == 0 {
-        return Err(StdError::generic_err("dwb entry list length is 0 when calling merge_dwb_entry"));
-    }
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("#merge_dwb_entry.1");
 
@@ -581,7 +581,7 @@ pub fn merge_dwb_entry(
 
         // need to insert new entry
         // create new stored balance entry
-        let btbe_entry = StoredEntry::from(storage, &dwb_entry, amount_spent)?;
+        let btbe_entry = StoredEntry::from(storage, &dwb_entry.clone(), amount_spent)?;
 
         // load contract's internal secret
         let secret = INTERNAL_SECRET.load(storage)?;

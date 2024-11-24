@@ -9,7 +9,7 @@ use serde_big_array::BigArray;
 use crate::btbe::{merge_dwb_entry, stored_balance};
 use crate::legacy_state;
 use crate::state::{safe_add, safe_add_u64, CONFIG};
-use crate::transaction_history::{store_migration_action, Tx, TRANSACTIONS};
+use crate::transaction_history::{ Tx, TRANSACTIONS};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
 #[cfg(feature = "gas_tracking")]
@@ -536,7 +536,7 @@ fn constant_time_is_not_zero(value: i32) -> u32 {
 }
 
 #[inline]
-fn constant_time_if_else(condition: u32, then: usize, els: usize) -> usize {
+pub fn constant_time_if_else(condition: u32, then: usize, els: usize) -> usize {
     (then * condition as usize) | (els * (1 - condition as usize))
 }
 

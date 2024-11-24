@@ -324,7 +324,7 @@ fn migrate_legacy_account(
         old_balance = legacy_state::get_old_balance(deps.storage, &sender_raw);
     }
 
-    if old_balance == None {
+    if old_balance.is_none() {
         return Err(StdError::generic_err("No legacy balance"));
     }
 
@@ -655,16 +655,12 @@ pub fn query_transactions(
     if dwb_index > 0 && txs_in_dwb_count > 0 && start < txs_in_dwb_count as u32 {
         // skip if start is after buffer entries
         let head_node_index = dwb.entries[dwb_index].head_node()?;
+
+        // only look if head node is not null
         if head_node_index > 0 {
             let head_node = TX_NODES
                 .add_suffix(&head_node_index.to_be_bytes())
-                .load(deps.storage);
-            // begin testing
-            if head_node.is_err() {
-                return Err(StdError::generic_err("tx node load error case 1"));
-            }
-            let head_node = head_node?;
-            // end testing
+                .load(deps.storage)?;
             txs_in_dwb = head_node.to_vec(deps.storage, deps.api)?;
         }
     }
@@ -696,24 +692,23 @@ pub fn query_transactions(
                 let mut bundle_idx = tx_bundles_idx_len - 1;
                 loop {
                     let tx_bundle = entry.get_tx_bundle_at(deps.storage, bundle_idx.clone())?;
-                    let head_node = TX_NODES
-                        .add_suffix(&tx_bundle.head_node.to_be_bytes())
-                        .load(deps.storage);
-                    // begin testing
-                    if head_node.is_err() {
-                        return Err(StdError::generic_err("tx node load error case 2"));
+
+                    // only look if head node is not null
+                    if tx_bundle.head_node > 0 {
+                        let head_node = TX_NODES
+                            .add_suffix(&tx_bundle.head_node.to_be_bytes())
+                            .load(deps.storage)?;
+
+                        let list_len = tx_bundle.list_len as u32;
+                        if txs_left <= list_len {
+                            txs.extend_from_slice(
+                                &head_node.to_vec(deps.storage, deps.api)?[0..txs_left as usize],
+                            );
+                            break;
+                        }
+                        txs.extend(head_node.to_vec(deps.storage, deps.api)?);
+                        txs_left = txs_left.saturating_sub(list_len);
                     }
-                    let head_node = head_node?;
-                    // end testing
-                    let list_len = tx_bundle.list_len as u32;
-                    if txs_left <= list_len {
-                        txs.extend_from_slice(
-                            &head_node.to_vec(deps.storage, deps.api)?[0..txs_left as usize],
-                        );
-                        break;
-                    }
-                    txs.extend(head_node.to_vec(deps.storage, deps.api)?);
-                    txs_left = txs_left.saturating_sub(list_len);
                     if bundle_idx > 0 {
                         bundle_idx -= 1;
                     } else {
@@ -737,26 +732,28 @@ pub fn query_transactions(
             find_start_bundle(deps.storage, &account_raw, settled_start)?
         {
             let mut txs_left = end - start;
-
-            let head_node = TX_NODES
-                .add_suffix(&tx_bundle.head_node.to_be_bytes())
-                .load(deps.storage);
-            // begin testing
-            if head_node.is_err() {
-                return Err(StdError::generic_err("tx node load error case 3"));
-            }
-            let head_node = head_node?;
-            // end testing
             let list_len = tx_bundle.list_len as u32;
             if start_at + txs_left <= list_len {
-                // this first bundle has all the txs we need
-                txs = head_node.to_vec(deps.storage, deps.api)?
-                    [start_at as usize..(start_at + txs_left) as usize]
-                    .to_vec();
+                // only look if head node is not null
+                if tx_bundle.head_node > 0 {
+                    let head_node = TX_NODES
+                        .add_suffix(&tx_bundle.head_node.to_be_bytes())
+                        .load(deps.storage)?;
+                    // this first bundle has all the txs we need
+                    txs = head_node.to_vec(deps.storage, deps.api)?
+                        [start_at as usize..(start_at + txs_left) as usize]
+                        .to_vec();
+                }
             } else {
-                // get the rest of the txs in this bundle and then go back through history
-                txs = head_node.to_vec(deps.storage, deps.api)?[start_at as usize..].to_vec();
-                txs_left = txs_left.saturating_sub(list_len - start_at);
+                // only look if head node is not null
+                if tx_bundle.head_node > 0 {
+                    let head_node = TX_NODES
+                        .add_suffix(&tx_bundle.head_node.to_be_bytes())
+                        .load(deps.storage)?;
+                    // get the rest of the txs in this bundle and then go back through history
+                    txs = head_node.to_vec(deps.storage, deps.api)?[start_at as usize..].to_vec();
+                    txs_left = txs_left.saturating_sub(list_len - start_at);
+                }
 
                 if bundle_idx > 0 && txs_left > 0 {
                     // get the next earlier bundle
@@ -765,34 +762,22 @@ pub fn query_transactions(
                         loop {
                             let tx_bundle =
                                 entry.get_tx_bundle_at(deps.storage, bundle_idx.clone())?;
-                            let head_node = TX_NODES
-                                .add_suffix(&tx_bundle.head_node.to_be_bytes())
-                                .load(deps.storage);
-                            // begin testing
-                            if head_node.is_err() {
-                                return Err(StdError::generic_err(format!(
-                                    "entry address: {:?}\nentry balance: {:?}\nentry history len: {:?}\nbundle index: {}\ntx bundle head node: {}\ntx_bundle list len: {}\ntx bundle offset:{}\n", 
-                                    entry.address()?,
-                                    entry.balance()?,
-                                    entry.history_len()?,
-                                    bundle_idx,
-                                    tx_bundle.head_node,
-                                    tx_bundle.list_len,
-                                    tx_bundle.offset,
-                                )));
+                            // only look if head node is not null
+                            if tx_bundle.head_node > 0 {
+                                let head_node = TX_NODES
+                                    .add_suffix(&tx_bundle.head_node.to_be_bytes())
+                                    .load(deps.storage)?;
+                                let list_len = tx_bundle.list_len as u32;
+                                if txs_left <= list_len {
+                                    txs.extend_from_slice(
+                                        &head_node.to_vec(deps.storage, deps.api)?
+                                            [0..txs_left as usize],
+                                    );
+                                    break;
+                                }
+                                txs.extend(head_node.to_vec(deps.storage, deps.api)?);
+                                txs_left = txs_left.saturating_sub(list_len);
                             }
-                            let head_node = head_node?;
-                            // end testing
-                            let list_len = tx_bundle.list_len as u32;
-                            if txs_left <= list_len {
-                                txs.extend_from_slice(
-                                    &head_node.to_vec(deps.storage, deps.api)?
-                                        [0..txs_left as usize],
-                                );
-                                break;
-                            }
-                            txs.extend(head_node.to_vec(deps.storage, deps.api)?);
-                            txs_left = txs_left.saturating_sub(list_len);
                             if bundle_idx > 0 {
                                 bundle_idx -= 1;
                             } else {
