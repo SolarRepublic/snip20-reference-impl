@@ -162,11 +162,21 @@ impl StoredEntry {
         dwb_entry: &DelayedWriteBufferEntry,
         amount_spent: Option<u128>,
     ) -> StdResult<()> {
-        let history_len_result = self.history_len();
-        if history_len_result.is_err() {
-            return Err(StdError::generic_err(
-                "use `from` to create new entry from dwb_entry",
-            ));
+        let history_len = self.history_len()?;
+
+        // peek at the last tx bundle added (read the dummy one if its void)
+        let empty_history = u32::from(history_len == 0);
+        let bundle_pos = constant_time_if_else_u32(
+             empty_history,
+             0u32,
+             history_len - 1
+        );
+
+        if history_len == 0 {
+            return Err(StdError::generic_err(format!(
+                "merging entry; history_len:{}, bundle_pos:{}",
+                history_len, bundle_pos
+            )));
         }
 
         let mut balance = self.balance()?;
@@ -186,15 +196,16 @@ impl StoredEntry {
 
         self.set_balance(balance)?;
 
-        // peek at the last tx bundle added (read the dummy one if its void)
-        let history_len = history_len_result?;
-        let empty_history = u32::from(history_len == 0);
-        let bundle_pos = constant_time_if_else_u32(
-             empty_history,
-             0u32,
-             history_len - 1
-        );
-        let last_tx_bundle = self.get_tx_bundle_at(storage, bundle_pos)?;
+        let last_tx_bundle_result = self.get_tx_bundle_at(storage, bundle_pos);
+        if last_tx_bundle_result.is_err() {
+            return Err(StdError::generic_err(format!(
+                "last_tx_bundle was not found at bundle_pos:{}; history_len:{}",
+                bundle_pos,
+                history_len
+            )));
+        }
+
+        let last_tx_bundle = last_tx_bundle_result?;
 
         // calculate the appropriate bundle offset to use
         let bundle_offset = constant_time_if_else_u32(
@@ -269,8 +280,9 @@ impl StoredEntry {
         self.set_tx_bundle_at_unchecked(storage, len, bundle)?;
         // if the head node is null, then add this as a ghost bundle that does not contribute to len of list, 
         // and will be overwritten next time
-        let len_add = constant_time_if_else((bundle.head_node == 0) as u32, 0, 1) as u32;
-        self.set_history_len(len.saturating_add(len_add))?;
+        // let len_add = constant_time_if_else_u32((bundle.head_node == 0) as u32, 0, 1);
+        // self.set_history_len(len.saturating_add(len_add))?;
+        self.set_history_len(len.saturating_add(1))?;
         Ok(())
     }
 }
@@ -531,9 +543,9 @@ pub fn stored_tx_count(storage: &dyn Storage, entry: &Option<StoredEntry>) -> St
     Ok(0)
 }
 
-// merges a dwb entry into the current node's bucket
+// settles a dwb entry into its appropriate bucket
 // `amount_spent` is any required subtraction due to being sender of tx
-pub fn merge_dwb_entry(
+pub fn settle_dwb_entry(
     storage: &mut dyn Storage,
     dwb_entry: &mut DelayedWriteBufferEntry,
     amount_spent: Option<u128>,
@@ -572,31 +584,6 @@ pub fn merge_dwb_entry(
         // save updated bucket to storage
         node.set_and_save_bucket(storage, bucket)?;
     } else {
-        // :: migration start
-        let old_balance = legacy_state::get_old_balance(storage, &dwb_entry.recipient()?);
-
-        if let Some(old_balance) = old_balance {
-            // get the denom. we could pass this as a parameter since we've already read it from storagae earlier, 
-            // but this is simpler to implement for an uncommon operation
-            let denom = CONFIG.load(storage)?.symbol;
-            // add migration to tx history
-            let migration_tx_id = store_migration_action(
-                storage, 
-                old_balance, 
-                denom, 
-                block
-            )?;
-            // add migration tx id to the dwb_entry before the incoming tx
-            dwb_entry.add_tx_node(storage, migration_tx_id)?;
-            // add in the old balance to the dwb_entry amount
-            let mut amount = dwb_entry.amount()? as u128;
-            safe_add(&mut amount, old_balance);
-            dwb_entry.set_amount(amount as u64)?;
-            // clear the old balance, so migration only happens once
-            legacy_state::clear_old_balance(storage, &dwb_entry.recipient()?);
-        }
-        // :: migration end
-
         // need to insert new entry
         // create new stored balance entry
         let btbe_entry = StoredEntry::from(storage, &dwb_entry, amount_spent)?;
@@ -890,7 +877,7 @@ mod tests {
 
             let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-            let _result = merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
+            let _result = settle_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
 
             let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
             assert_eq!(btbe_node_count, 1);
@@ -919,7 +906,7 @@ mod tests {
 
         let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-        let _result = merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
+        let _result = settle_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
 
         let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
         assert_eq!(btbe_node_count, 3);
