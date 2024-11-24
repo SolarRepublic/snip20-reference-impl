@@ -1554,6 +1554,7 @@ fn try_redeem(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        false,
     )?;
 
     DWB.save(deps.storage, &dwb)?;
@@ -1618,6 +1619,7 @@ fn try_transfer_impl(
         denom,
         memo,
         block,
+        false,
         #[cfg(feature = "gas_tracking")]
         tracker,
     )?;
@@ -2130,6 +2132,7 @@ fn try_transfer_from_impl(
         denom,
         memo,
         &env.block,
+        true,
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
     )?;
@@ -2514,7 +2517,9 @@ fn try_burn_from(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        raw_burner == raw_owner,
     )?;
+
     if raw_burner != raw_owner {
         // also settle sender's account
         dwb.settle_sender_or_owner_account(
@@ -2526,6 +2531,7 @@ fn try_burn_from(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
             &env.block,
+            false,
         )?;
     }
 
@@ -2616,7 +2622,9 @@ fn try_batch_burn_from(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
             &env.block,
+            raw_spender == raw_owner,
         )?;
+
         if raw_spender != raw_owner {
             dwb.settle_sender_or_owner_account(
                 deps.storage,
@@ -2627,6 +2635,7 @@ fn try_batch_burn_from(
                 #[cfg(feature = "gas_tracking")]
                 &mut tracker,
                 &env.block,
+                false,
             )?;
         }
 
@@ -2909,6 +2918,7 @@ fn try_burn(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        false,
     )?;
 
     DWB.save(deps.storage, &dwb)?;
@@ -2954,6 +2964,7 @@ fn perform_transfer(
     denom: String,
     memo: Option<String>,
     block: &BlockInfo,
+    is_from_action: bool,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
 ) -> StdResult<u128> {
     #[cfg(feature = "gas_tracking")]
@@ -2983,9 +2994,10 @@ fn perform_transfer(
         #[cfg(feature = "gas_tracking")]
         tracker,
         block,
+        sender == from && is_from_action,
     )?;
 
-    // if this is a *_from action, settle the sender's account, too
+    // if this is a foreign *_from action, settle the sender's account, too
     if sender != from {
         dwb.settle_sender_or_owner_account(
             store,
@@ -2996,6 +3008,7 @@ fn perform_transfer(
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            false,
         )?;
     }
 
@@ -3050,6 +3063,7 @@ fn perform_mint(
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            false,
         )?;
     }
 

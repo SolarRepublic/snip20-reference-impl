@@ -79,6 +79,7 @@ impl DelayedWriteBuffer {
         })
     }
 
+
     /// settles a participant's account who may or may not have an entry in the buffer
     /// gets balance including any amount in the buffer, and then subtracts amount spent in this tx
     pub fn settle_sender_or_owner_account(
@@ -90,6 +91,7 @@ impl DelayedWriteBuffer {
         op_name: &str,
         #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
         block: &BlockInfo, // added for migration
+        is_from_self: bool,
     ) -> StdResult<u128> {
         #[cfg(feature = "gas_tracking")]
         let mut group1 = tracker.group("settle_sender_or_owner_account.1");
@@ -108,6 +110,11 @@ impl DelayedWriteBuffer {
         };
 
         dwb_entry.add_tx_node(store, tx_id)?;
+
+        // *_from action where sender is the owner, repeat the event in history
+        if is_from_self {
+            dwb_entry.add_tx_node(store, tx_id)?;
+        }
 
         #[cfg(feature = "gas_tracking")]
         group1.log("add_tx_node");
@@ -484,7 +491,7 @@ impl DelayedWriteBufferEntry {
 
     // adds some amount to the total amount for all txs in the entry linked list
     // returns: the new amount
-    fn add_amount(&mut self, add_tx_amount: u128) -> StdResult<u64> {
+    pub fn add_amount(&mut self, add_tx_amount: u128) -> StdResult<u64> {
         // change this to safe_add if your coin needs to store amount in buffer as u128 (e.g. 18 decimals)
         let mut amount = self.amount()?;
         let add_tx_amount_u64 = amount_u64(Some(add_tx_amount))?;

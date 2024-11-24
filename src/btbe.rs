@@ -555,8 +555,11 @@ pub fn settle_dwb_entry(
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("#merge_dwb_entry.1");
 
+    // ref the entry's recipient address
+    let address = &dwb_entry.recipient()?;
+
     // locate the node that the given entry belongs in
-    let (mut node, mut node_id, mut bit_pos) = locate_btbe_node(storage, &dwb_entry.recipient()?)?;
+    let (mut node, mut node_id, mut bit_pos) = locate_btbe_node(storage, address)?;
 
     // load that node's current bucket
     let mut bucket = node.bucket(storage)?;
@@ -565,7 +568,7 @@ pub fn settle_dwb_entry(
     let mut bucket_id = node.bucket;
 
     // search for an existing entry
-    if let Some((idx, mut found_entry)) = bucket.constant_time_find_address(&dwb_entry.recipient()?)
+    if let Some((idx, mut found_entry)) = bucket.constant_time_find_address(address)
     {
         // found existing entry
         // merge amount and history from dwb entry
@@ -575,7 +578,7 @@ pub fn settle_dwb_entry(
         #[cfg(feature = "gas_tracking")]
         group1.logf(format!(
             "merged {} into node #{}, bucket #{} at position {} ",
-            dwb_entry.recipient()?,
+            address,
             node_id,
             bucket_id,
             idx
@@ -583,7 +586,36 @@ pub fn settle_dwb_entry(
 
         // save updated bucket to storage
         node.set_and_save_bucket(storage, bucket)?;
-    } else {
+    }
+    // nothing was stored yet
+    else {
+        // lookup old balance
+        let old_balance = legacy_state::get_old_balance(storage, address);
+
+        // legacy balance still exists
+        if let Some(migrated_balance) = old_balance {
+            // get the denom. we could pass this as a parameter since we've already read it from storagae earlier, 
+            // but this is simpler to implement for an uncommon operation
+            let denom = CONFIG.load(storage)?.symbol;
+
+            // add migration to tx history
+            let migration_tx_id = store_migration_action(
+                storage, 
+                migrated_balance, 
+                denom, 
+                block
+            )?;
+
+            // add migration tx id to the entry before it settles
+            dwb_entry.add_tx_node(storage, migration_tx_id)?;
+
+            // add in the migrated balance to the entry amount before it settles
+            dwb_entry.add_amount(migrated_balance)?;
+
+            // clear the old balance, so migration only happens once
+            legacy_state::clear_old_balance(storage, address);
+        }
+
         // need to insert new entry
         // create new stored balance entry
         let btbe_entry = StoredEntry::from(storage, &dwb_entry, amount_spent)?;
