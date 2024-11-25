@@ -13,7 +13,7 @@ export function balance(k_eoa: ExternallyOwnedAccount, xg_amount: bigint): void 
 
 	// cannot be negative
 	if(k_eoa.balance < 0n) {
-		throw Error(`Unexpected negative balance when modifying with ${xg_amount} on ${k_eoa.address}`);
+		throw Error(`Unexpected negative balance when modifying with ${xg_amount} on ${k_eoa.alias || k_eoa.address}`);
 	}
 }
 
@@ -24,7 +24,8 @@ export function bank(k_eoa: ExternallyOwnedAccount, xg_amount: bigint): void {
 
 	// cannot be negative
 	if(k_eoa.bank < 0n) {
-		throw Error(`Unexpected negative bank when modifying with ${xg_amount} on ${k_eoa.address}`);
+		debugger;
+		throw Error(`Unexpected negative bank ${k_eoa.bank} when modifying with ${xg_amount} on ${k_eoa.alias || k_eoa.address}`);
 	}
 }
 

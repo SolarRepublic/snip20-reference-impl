@@ -88,7 +88,15 @@ export class ExternallyOwnedAccount {
 		return this._s_alias;
 	}
 
-	migrate(): void {
+	get label(): string {
+		return this._s_alias || this._sa_addr;
+	}
+
+	migrate(b_explicit=false): void {
+		if(b_explicit && this.txs.length) {
+			throw Error(`Explicit migration should not have been allowed`);
+		}
+
 		// first tx in post-migration
 		if(!this.txs.length && this.transfers.length) {
 			// add auto-migrate event

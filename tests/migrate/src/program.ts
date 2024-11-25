@@ -4,7 +4,7 @@ import type {Snip20, Snip20Queries, Snip26, Snip24Executions, Snip24Queries, Sni
 
 import {readFileSync} from 'node:fs';
 
-import {__UNDEFINED, bigint_greater, bigint_lesser, canonicalize_json, keys, MutexPool, stringify_json} from '@blake.regalia/belt';
+import {__UNDEFINED, bigint_greater, bigint_lesser, canonicalize_json, is_number, keys, MutexPool, stringify_json} from '@blake.regalia/belt';
 
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
@@ -59,19 +59,21 @@ function transfer_from(
 	k_sender: ExternallyOwnedAccount,
 	k_recipient: ExternallyOwnedAccount,
 	xg_amount: bigint,
-	k_from: ExternallyOwnedAccount=k_sender
+	k_from?: ExternallyOwnedAccount
 ) {
+	const k_owner = k_from || k_sender;
+
 	// migrated
 	if(k_snip_migrated) {
 		// init migration
-		k_from.migrate();
+		k_owner.migrate();
 		k_recipient.migrate();
 
 		// create event
 		const g_event: Snip250TxEvent = {
 			action: {
 				transfer: {
-					from: k_from.address,
+					from: (k_owner || k_sender).address,
 					sender: k_sender.address,
 					recipient: k_recipient.address,
 				},
@@ -83,20 +85,28 @@ function transfer_from(
 		};
 
 		// add to histories
-		k_from.txs.push(g_event);
+		k_owner.txs.push(g_event);
 		k_recipient.txs.push(g_event);
 
-		// add to sender history as well
-		if(k_from !== k_sender) {
+		// *_from action
+		if(k_from) {
+			// add to sender history as well
 			k_sender.migrate();
 			k_sender.txs.push(g_event);
+
+			// update allowances (object by ref appleis to both at once)
+			const xg_new_allowance = k_owner.allowancesGiven[k_sender.address].amount -= xg_amount;
+			if(xg_new_allowance < 0n) {
+				debugger;
+				throw Error(`${k_sender.label} overspent their allowance from ${k_owner.label} by ${-xg_new_allowance} when transferring ${xg_amount} to ${k_recipient.label}`);
+			}
 		}
 	}
 	// legacy
 	else {
 		// create legacy event
 		const g_event: Snip20TransferEvent = {
-			from: k_from.address,
+			from: k_owner.address,
 			sender: k_sender.address,
 			receiver: k_recipient.address,
 			coins: {
@@ -106,15 +116,15 @@ function transfer_from(
 		};
 
 		// add to histories
-		k_from.transfers.push(g_event);
+		k_owner.transfers.push(g_event);
 		k_recipient.transfers.push(g_event);
 
 		// add to sender history as well
-		if(k_from !== k_sender) k_sender.transfers.push(g_event);
+		if(k_owner !== k_sender) k_sender.transfers.push(g_event);
 	}
 
 	// update balances
-	balance(k_from, -xg_amount);
+	balance(k_owner, -xg_amount);
 	balance(k_recipient, xg_amount);
 }
 
@@ -202,24 +212,21 @@ const H_FUNCTIONS = {
 
 		if(k_snip_migrated) {
 			h_given[sa_spender] = h_recvd[sa_sender] = {
-				amount: bigint_lesser(XG_UINT128_MAX, (!g_prev?.expiration || g_prev.expiration < Date.now()? 0n: g_prev.amount) + xg_amount),
+				amount: bigint_lesser(XG_UINT128_MAX, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) + xg_amount),
 				expiration: n_exp,
 			};
 		}
 	}),
 
 	decreaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
-		// const h_given = ExternallyOwnedAccount.at(sa_spender).allowancesGiven;
-		// const h_recvd = k_sender.allowancesReceived;
-
 		const h_given = k_sender.allowancesGiven;
 		const h_recvd = ExternallyOwnedAccount.at(sa_spender).allowancesReceived;
 		const sa_sender = k_sender.address;
 		const g_prev = h_given[sa_spender];
 
 		if(k_snip_migrated) {
-			h_given[sa_sender] = h_recvd[sa_sender] = {
-				amount: bigint_greater(0n, (!g_prev?.expiration || g_prev.expiration < Date.now()? 0n: g_prev.amount) - xg_amount),
+			h_given[sa_spender] = h_recvd[sa_sender] = {
+				amount: bigint_greater(0n, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) - xg_amount),
 				expiration: n_exp,
 			};
 		}
@@ -276,7 +283,7 @@ const H_FUNCTIONS = {
 	}),
 
 	migrateLegacyAccount: handler('padding: string', (k_sender, g_args) => {
-		k_sender.migrate();
+		k_sender.migrate(true);
 	}),
 };
 
@@ -290,6 +297,7 @@ const a_aliases = [
 	'Bob',
 	'Carol',
 	'David',
+	'Zulu',
 ];
 
 // numeric accounts
@@ -392,7 +400,23 @@ const program = (b_premigrate: boolean) => `
 			0 David
 			1 Carol
 			0 Carol
-	
+
+	---
+
+	send David 2 David
+	---
+	send David 0 David
+	---
+	send David 2 Alice {}
+	---
+	send David 1 Alice {"confirm":{}}
+	---
+	send David 0 Bob {}
+	---
+	send David 1 Carol
+	---
+	send David 1 Carol {}
+	---
 	send:
 		David:
 			2 David
@@ -422,7 +446,7 @@ const program = (b_premigrate: boolean) => `
 	increaseAllowance:
 		Alice:
 			0 Bob
-			2 Carol
+			200 Carol
 			1 David
 
 	---
@@ -435,6 +459,9 @@ const program = (b_premigrate: boolean) => `
 			8 Alice Carol
 			0 Carol David       ${b_premigrate? '': '**fail insufficient allowance'}
 			1000 Alice David    **fail insufficient allowance
+
+		Carol:
+			2 Alice David
 
 	increaseAllowance:
 		Bob:
@@ -633,7 +660,7 @@ async function validate_state(b_premigrate=false) {
 					// assert numbers match
 					if(a_allowances.length !== keys(h_allowances).length) {
 						debugger;
-						throw Error(`Suite recorded ${keys(h_allowances).length} allowances ${si_which} for ${k_eoa.alias || k_eoa.address} but contract has ${a_allowances.length}`);
+						throw Error(`Suite recorded ${keys(h_allowances).length} allowances ${si_which} for ${k_eoa.label} but contract has ${a_allowances.length}`);
 					}
 
 					// each allowance given
@@ -644,7 +671,7 @@ async function validate_state(b_premigrate=false) {
 						// not found
 						if(!g_allowance_local) {
 							debugger;
-							throw Error(`No allowances ${si_which} found for ${k_eoa.alias || k_eoa.address} locally`);
+							throw Error(`No allowances ${si_which} found for ${k_eoa.label} locally`);
 						}
 
 						// destructure local
@@ -653,9 +680,10 @@ async function validate_state(b_premigrate=false) {
 							expiration: n_expiration,
 						} = g_allowance_local;
 
+						// check allowance amounts
 						if(g_allowance.allowance !== `${xg_amount}`) {
 							debugger;
-							throw Error(`Different allowance amounts`);
+							throw Error(`Different allowance amounts; ${k_eoa.label} locally has ${xg_amount} in allowances ${si_which} to ${ExternallyOwnedAccount.at(g_allowance.spender).alias} but contract reports ${g_allowance.allowance}`);
 						}
 
 						// check expiration
@@ -706,7 +734,26 @@ const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
 	const k_parser = new Parser(`
 		migrateLegacyAccount David 1
 
-		transfer Alice 90 Bob
+		migrateLegacyAccount David _      **fail already migrated
+
+		migrateLegacyAccount Zulu _       **fail legacy balance
+
+		transfer Alice 19 Bob
+		---
+		transfer Alice 18 Bob
+		---
+		transfer Alice 5 Carol
+		---
+		transfer Alice 1 David
+		---
+
+		transferFrom Carol 1 Alice David  **fail insufficient allowance
+
+		increaseAllowance Alice 50 Carol
+
+		---
+
+		transferFrom Carol 2 Alice David
 
 		---
 
