@@ -162,26 +162,11 @@ impl StoredEntry {
         dwb_entry: &DelayedWriteBufferEntry,
         amount_spent: Option<u128>,
     ) -> StdResult<()> {
-        let history_len = self.history_len()?;
-
-        // peek at the last tx bundle added (read the dummy one if its void)
-        let empty_history = u32::from(history_len == 0);
-        let bundle_pos = constant_time_if_else_u32(
-             empty_history,
-             0u32,
-             history_len - 1
-        );
-
-        if history_len == 0 {
-            return Err(StdError::generic_err(format!(
-                "merging entry; history_len:{}, bundle_pos:{}",
-                history_len, bundle_pos
-            )));
-        }
-
+        // increase account's stored balance
         let mut balance = self.balance()?;
         safe_add_u64(&mut balance, dwb_entry.amount()?);
 
+        // safety check amount spent before spending from balance
         let amount_spent = amount_u64(amount_spent)?;
 
         // error should never happen because already checked in `settle_sender_or_owner_account`
@@ -194,24 +179,38 @@ impl StoredEntry {
             )));
         };
 
+        // set new balance to stored entry
         self.set_balance(balance)?;
 
-        let last_tx_bundle_result = self.get_tx_bundle_at(storage, bundle_pos);
+        // retrieve currenty history length
+        let history_len = self.history_len()?;
+
+        // flag if history is empty
+        let empty_history = (history_len == 0) as u32;
+
+        // position of last tx bundle to read
+        let bundle_pos = constant_time_if_else_u32(
+             empty_history,
+             0u32,
+             history_len.wrapping_sub(1)  // constant-time subtraction with underflow
+        );
+
+        // peek at the last tx bundle added (read the dummy one if its void)
+        let last_tx_bundle_result = self.get_tx_bundle_at_unchecked(storage, bundle_pos);
         if last_tx_bundle_result.is_err() {
             return Err(StdError::generic_err(format!(
-                "last_tx_bundle was not found at bundle_pos:{}; history_len:{}",
-                bundle_pos,
-                history_len
+                "missing tx bundle while merging dwb entry!",
             )));
         }
 
+        // unwrap
         let last_tx_bundle = last_tx_bundle_result?;
 
         // calculate the appropriate bundle offset to use
         let bundle_offset = constant_time_if_else_u32(
             empty_history,
             0u32,
-            last_tx_bundle.offset + u32::from(last_tx_bundle.list_len)
+            last_tx_bundle.offset + (last_tx_bundle.list_len as u32)
         );
 
         // create new tx bundle
@@ -280,9 +279,8 @@ impl StoredEntry {
         self.set_tx_bundle_at_unchecked(storage, len, bundle)?;
         // if the head node is null, then add this as a ghost bundle that does not contribute to len of list, 
         // and will be overwritten next time
-        // let len_add = constant_time_if_else_u32((bundle.head_node == 0) as u32, 0, 1);
-        // self.set_history_len(len.saturating_add(len_add))?;
-        self.set_history_len(len.saturating_add(1))?;
+        let len_add = constant_time_if_else_u32((bundle.head_node == 0) as u32, 0, 1);
+        self.set_history_len(len.saturating_add(len_add))?;
         Ok(())
     }
 }
