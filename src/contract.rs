@@ -38,7 +38,7 @@ use crate::notifications::{
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    safe_add, AllowancesStore, Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET, TOTAL_SUPPLY
+    safe_add, AllowancesStore, Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET, NOTIFICATIONS_ENABLED, TOTAL_SUPPLY
 };
 use crate::strings::TRANSFER_HISTORY_UNSUPPORTED_MSG;
 use crate::transaction_history::{
@@ -130,6 +130,8 @@ pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> StdResult<Response>
     for channel in channels {
         CHANNELS.insert(deps.storage, &channel)?;
     }
+
+    NOTIFICATIONS_ENABLED.save(deps.storage, &true)?;
 
     let vk_seed = hkdf_sha_256(
         &salt,
@@ -294,6 +296,9 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         ExecuteMsg::AddSupportedDenoms { denoms, .. } => add_supported_denoms(deps, info, denoms),
         ExecuteMsg::RemoveSupportedDenoms { denoms, .. } => {
             remove_supported_denoms(deps, info, denoms)
+        },
+        ExecuteMsg::SetNotificationStatus { enabled, .. } => {
+            set_notification_status(deps, info, enabled)
         },
         ExecuteMsg::MigrateLegacyAccount { .. } => migrate_legacy_account(deps, env, info),
     };
@@ -1097,6 +1102,24 @@ fn remove_supported_denoms(
     )
 }
 
+fn set_notification_status(
+    deps: DepsMut,
+    info: MessageInfo,
+    enabled: bool,
+) -> StdResult<Response> {
+    let config = CONFIG.load(deps.storage)?;
+
+    check_if_admin(&config.admin, &info.sender)?;
+
+    NOTIFICATIONS_ENABLED.save(deps.storage, &enabled)?;
+    
+    Ok(
+        Response::new().set_data(to_binary(&ExecuteAnswer::SetNotificationStatus {
+            status: Success,
+        })?),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn try_mint_impl(
     deps: &mut DepsMut,
@@ -1189,12 +1212,15 @@ fn try_mint(
     )
     .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    let resp = Response::new()
-        .set_data(to_binary(&ExecuteAnswer::Mint { status: Success })?)
-        .add_attribute_plaintext(
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::Mint { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
             received_notification.id_plaintext(),
             received_notification.data_plaintext(),
         );
+    }
 
     #[cfg(feature = "gas_tracking")]
     return Ok(resp.add_gas_tracker(tracker));
@@ -1276,13 +1302,17 @@ fn try_batch_mint(
 
     TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
 
-    Ok(Response::new()
-        .set_data(to_binary(&ExecuteAnswer::BatchMint { status: Success })?)
-        .add_attribute_plaintext(
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BatchMint { status: Success })?);
+    
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
             format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
-        )
-    )
+        );
+    }
+
+    Ok(resp)
 }
 
 pub fn try_set_key(deps: DepsMut, info: MessageInfo, key: String) -> StdResult<Response> {
@@ -1671,9 +1701,11 @@ fn try_transfer(
         Some(NOTIFICATION_BLOCK_SIZE)
     )?;
 
-    let resp = Response::new()
-        .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?)
-        .add_attribute_plaintext(
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::Transfer { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
             received_notification.id_plaintext(),
             received_notification.data_plaintext(),
         )
@@ -1681,6 +1713,7 @@ fn try_transfer(
             spent_notification.id_plaintext(),
             spent_notification.data_plaintext(),
         );
+    }
 
     #[cfg(feature = "gas_tracking")]
     group1.log("rest");
@@ -1764,9 +1797,11 @@ fn try_batch_transfer(
     )
     .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    let resp = Response::new()
-        .set_data(to_binary(&ExecuteAnswer::BatchTransfer { status: Success })?)
-        .add_attribute_plaintext(
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BatchTransfer { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
             format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
         )
@@ -1774,6 +1809,7 @@ fn try_batch_transfer(
             spent_notification.id_plaintext(),
             spent_notification.data_plaintext(),
         );
+    }
 
     #[cfg(feature = "gas_tracking")]
     return Ok(resp.add_gas_tracker(tracker));
@@ -1905,10 +1941,12 @@ fn try_send(
     let spent_notification =
         spent_notification.to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    let resp = Response::new()
+    let mut resp = Response::new()
         .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::Send { status: Success })?)
-        .add_attribute_plaintext(
+        .set_data(to_binary(&ExecuteAnswer::Send { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
             received_notification.id_plaintext(),
             received_notification.data_plaintext(),
         )
@@ -1916,6 +1954,7 @@ fn try_send(
             spent_notification.id_plaintext(),
             spent_notification.data_plaintext(),
         );
+    }
 
     #[cfg(feature = "gas_tracking")]
     return Ok(resp.add_gas_tracker(tracker));
@@ -2004,18 +2043,22 @@ fn try_batch_send(
     )
     .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    Ok(Response::new()
+    let mut resp = Response::new()
         .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::BatchSend { status: Success })?)
-        .add_attribute_plaintext(
+        .set_data(to_binary(&ExecuteAnswer::BatchSend { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
             format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
         )
         .add_attribute_plaintext(
             spent_notification.id_plaintext(),
             spent_notification.data_plaintext(),
-        )
-    )
+        );
+    }
+
+    Ok(resp)
 }
 
 fn try_register_receive(
@@ -2160,18 +2203,21 @@ fn try_transfer_from(
         Some(NOTIFICATION_BLOCK_SIZE)
     )?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::TransferFrom { status: Success })?)
-            .add_attribute_plaintext(
-                received_notification.id_plaintext(),
-                received_notification.data_plaintext(),
-            )
-            .add_attribute_plaintext(
-                spent_notification.id_plaintext(),
-                spent_notification.data_plaintext(),
-            )
-    )
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::TransferFrom { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
+            received_notification.id_plaintext(),
+            received_notification.data_plaintext(),
+        )
+        .add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        );
+    }
+
+    Ok(resp)
 }
 
 fn try_batch_transfer_from(
@@ -2229,18 +2275,21 @@ fn try_batch_transfer_from(
         secret,
     )?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::BatchTransferFrom {status: Success})?)
-            .add_attribute_plaintext(
-                format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
-                Binary::from(received_data).to_base64(),
-            )
-            .add_attribute_plaintext(
-                format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID),
-                Binary::from(spent_data).to_base64(),
-            )
-    )
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BatchTransferFrom {status: Success})?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            Binary::from(received_data).to_base64(),
+        )
+        .add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID),
+            Binary::from(spent_data).to_base64(),
+        );
+    }
+
+    Ok(resp)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2328,10 +2377,12 @@ fn try_send_from(
     let spent_notification =
         spent_notification.to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    Ok(Response::new()
+    let mut resp = Response::new()
         .add_messages(messages)
-        .set_data(to_binary(&ExecuteAnswer::SendFrom { status: Success })?)
-        .add_attribute_plaintext(
+        .set_data(to_binary(&ExecuteAnswer::SendFrom { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
             received_notification.id_plaintext(),
             received_notification.data_plaintext(),
         )
@@ -2339,7 +2390,9 @@ fn try_send_from(
             spent_notification.id_plaintext(),
             spent_notification.data_plaintext(),
         )
-    )
+    }
+
+    Ok(resp)
 }
 
 fn try_batch_send_from(
@@ -2399,20 +2452,24 @@ fn try_batch_send_from(
         secret,
     )?;
 
-    Ok(Response::new()
+    let mut resp = Response::new()
         .add_messages(messages)
         .set_data(to_binary(&ExecuteAnswer::BatchSendFrom {
             status: Success,
-        })?)
-        .add_attribute_plaintext(
+        })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
             format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
         )
         .add_attribute_plaintext(
             format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID),
             Binary::from(spent_data).to_base64(),
-        )
-    )
+        );
+    }
+
+    Ok(resp)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2506,14 +2563,17 @@ fn try_burn_from(
     )
     .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::BurnFrom { status: Success })?)
-            .add_attribute_plaintext(
-                spent_notification.id_plaintext(),
-                spent_notification.data_plaintext(),
-            )
-    )
+    let mut resp =  Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BurnFrom { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        );
+    }
+
+    Ok(resp)
 }
 
 fn try_batch_burn_from(
@@ -2619,14 +2679,17 @@ fn try_batch_burn_from(
         secret,
     )?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::BatchBurnFrom {status: Success,})?)
-            .add_attribute_plaintext(
-                format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID),
-                Binary::from(spent_data).to_base64(),
-            )
-    )
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::BatchBurnFrom {status: Success,})?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
+            format!("snip52:#{}", MULTI_SPENT_CHANNEL_ID),
+            Binary::from(spent_data).to_base64(),
+        );
+    }
+
+    Ok(resp)
 }
 
 fn try_increase_allowance(
@@ -2669,18 +2732,21 @@ fn try_increase_allowance(
     )
     .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::IncreaseAllowance {
-                owner: info.sender,
-                spender,
-                allowance: Uint128::from(new_amount),
-            })?)
-            .add_attribute_plaintext(
-                notification.id_plaintext(),
-                notification.data_plaintext()
-            )
-    )
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::IncreaseAllowance {
+            owner: info.sender,
+            spender,
+            allowance: Uint128::from(new_amount),
+        })?);
+    
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
+            notification.id_plaintext(),
+            notification.data_plaintext()
+        );
+    }
+
+    Ok(resp)  
 }
 
 fn try_decrease_allowance(
@@ -2723,18 +2789,21 @@ fn try_decrease_allowance(
     )
     .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::DecreaseAllowance {
-                owner: info.sender,
-                spender,
-                allowance: Uint128::from(new_amount),
-            })?)
-            .add_attribute_plaintext(
-                notification.id_plaintext(),
-                notification.data_plaintext()
-            )
-    )
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::DecreaseAllowance {
+            owner: info.sender,
+            spender,
+            allowance: Uint128::from(new_amount),
+        })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
+            notification.id_plaintext(),
+            notification.data_plaintext()
+        );
+    }
+
+    Ok(resp)
 }
 
 fn add_minters(
@@ -2886,14 +2955,17 @@ fn try_burn(
     )
     .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
-    Ok(
-        Response::new()
-            .set_data(to_binary(&ExecuteAnswer::Burn { status: Success })?)
-            .add_attribute_plaintext(
-                spent_notification.id_plaintext(),
-                spent_notification.data_plaintext(),
-            )
-    )
+    let mut resp = Response::new()
+        .set_data(to_binary(&ExecuteAnswer::Burn { status: Success })?);
+
+    if NOTIFICATIONS_ENABLED.load(deps.storage)? {
+        resp = resp.add_attribute_plaintext(
+            spent_notification.id_plaintext(),
+            spent_notification.data_plaintext(),
+        );
+    }
+
+    Ok(resp)
 }
 
 fn perform_transfer(

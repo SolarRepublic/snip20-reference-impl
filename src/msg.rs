@@ -287,6 +287,12 @@ pub enum ExecuteMsg {
         #[cfg(feature = "gas_evaporation")]
         gas_target: Option<Uint64>,
     },
+    /// Enable or disable SNIP-52 notifications
+    SetNotificationStatus {
+        enabled: bool,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+    },
 
     // Permit
     RevokePermit {
@@ -399,6 +405,9 @@ pub enum ExecuteAnswer {
         status: ResponseStatus,
     },
     RemoveSupportedDenoms {
+        status: ResponseStatus,
+    },
+    SetNotificationStatus {
         status: ResponseStatus,
     },
 
