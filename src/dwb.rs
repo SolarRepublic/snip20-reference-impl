@@ -158,6 +158,12 @@ impl DelayedWriteBuffer {
         // locate the position of the entry in the buffer
         let matched_entry_idx = self.recipient_match(address);
 
+        // testing start
+        if matched_entry_idx >= self.entries.len() {
+            return Err(StdError::generic_err("Recipient matching more than one entry in the buffer!!"))
+        }
+        // testing end
+
         // get the current entry at the matched index (0 if dummy)
         let mut entry = self.entries[matched_entry_idx];
 
