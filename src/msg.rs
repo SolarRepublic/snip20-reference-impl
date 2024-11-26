@@ -11,6 +11,7 @@ use secret_toolkit::{notification::ChannelInfoData, permit::Permit};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct MigrateMsg {
+    pub refund_transfers_to_contract: bool,
 }
 
 #[cfg_attr(test, derive(Eq, PartialEq))]

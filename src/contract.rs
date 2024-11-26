@@ -6,14 +6,15 @@ use cosmwasm_std::{
 };
 #[cfg(feature = "gas_evaporation")]
 use cosmwasm_std::Api;
+use cosmwasm_storage::ReadonlyPrefixedStorage;
 use secret_toolkit::notification::{get_seed, notification_id, BloomParameters, ChannelInfoData, Descriptor, FlatDescriptor, Notification, NotificationData, StructDescriptor,};
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
 use secret_toolkit::utils::{pad_handle_result, pad_query_result};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{hkdf_sha_256, sha_256, ContractPrng};
 
-use crate::legacy_state::VKSEED;
-use crate::{batch, legacy_state, legacy_viewing_key,};
+use crate::legacy_state::{get_all_old_transfers, get_old_balance, PREFIX_TXS, VKSEED};
+use crate::{batch, legacy_append_store, legacy_state, legacy_viewing_key, msg};
 
 #[cfg(feature = "gas_tracking")]
 use crate::dwb::log_dwb;
@@ -51,7 +52,7 @@ pub const NOTIFICATION_BLOCK_SIZE: usize = 36;
 pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
 
 #[entry_point]
-pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> StdResult<Response> {
+pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> StdResult<Response> {
     // migrate old data
 
     // :: minters
@@ -80,7 +81,7 @@ pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> StdResult<Response>
             redeem_is_enabled: true,
             mint_is_enabled: false,
             burn_is_enabled: false,
-            contract_address: env.contract.address,
+            contract_address: env.contract.address.clone(),
             supported_denoms: vec!["uscrt".to_string()],
             can_modify_denoms: false,
         }
@@ -140,6 +141,46 @@ pub fn migrate(deps: DepsMut, env: Env, _msg: MigrateMsg) -> StdResult<Response>
         32,
     )?;
     VKSEED.save(deps.storage, &vk_seed)?;
+
+    if msg.refund_transfers_to_contract {
+        let contract_canonical = deps.api.addr_canonicalize(env.contract.address.as_str())?;
+        let txs = get_all_old_transfers(
+            deps.api, 
+            deps.storage, 
+            &contract_canonical
+        )?;
+        let balance = get_old_balance(
+            deps.storage, 
+            &contract_canonical,
+        ).unwrap_or_default();
+        let mut receive_sum = 0;
+
+        let mut rng = ContractPrng::new(rng_seed.0.as_slice(), &sha_256(&constants.prng_seed));
+        for tx in txs {
+            if tx.receiver == env.contract.address {
+                let original_owner = deps.api.addr_canonicalize(tx.from.as_str())?;
+                perform_transfer(
+                    deps.storage,
+                    &mut rng,
+                    &contract_canonical,
+                    &original_owner,
+                    &contract_canonical,
+                    tx.coins.amount.u128(),
+                    tx.coins.denom,
+                    Some("Refund for tokens sent to contract".to_string()),
+                    &env.block,
+                    #[cfg(feature = "gas_tracking")]
+                    &mut tracker,
+                )?;
+                receive_sum += tx.coins.amount.u128();
+            }
+        }
+
+        // confirm all received coins equaled the current balance, otherwise fail out
+        if balance != receive_sum {
+            return Err(StdError::generic_err("Contract balance is not equal to incoming tx amounts."));
+        }
+    }
 
     Ok(Response::default())
 }
