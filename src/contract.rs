@@ -40,7 +40,7 @@ use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
     safe_add, AllowancesStore, Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET, NOTIFICATIONS_ENABLED, TOTAL_SUPPLY
 };
-use crate::strings::TRANSFER_HISTORY_UNSUPPORTED_MSG;
+use crate::strings::{SEND_TO_SSCRT_CONTRACT_MSG, TRANSFER_HISTORY_UNSUPPORTED_MSG};
 use crate::transaction_history::{
     store_burn_action, store_deposit_action, store_mint_action, store_redeem_action, store_transfer_action, Tx
 };
@@ -1668,6 +1668,11 @@ fn try_transfer(
 
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
+    // make sure the sender is not accidentally sending tokens to the sscrt contract address
+    if recipient == env.contract.address {
+        return Err(StdError::generic_err(SEND_TO_SSCRT_CONTRACT_MSG));
+    }
+
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
@@ -1750,6 +1755,12 @@ fn try_batch_transfer(
     let mut notifications = vec![];
     for action in actions {
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
+
+        // make sure the sender is not accidentally sending tokens to the sscrt contract address
+        if recipient == env.contract.address {
+            return Err(StdError::generic_err(SEND_TO_SSCRT_CONTRACT_MSG));
+        }
+
         let (received_notification, spent_notification) = try_transfer_impl(
             &mut deps,
             rng,
@@ -1913,6 +1924,11 @@ fn try_send(
     let mut messages = vec![];
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
+    // make sure the sender is not accidentally sending tokens to the sscrt contract address
+    if recipient == env.contract.address {
+        return Err(StdError::generic_err(SEND_TO_SSCRT_CONTRACT_MSG));
+    }
+
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
@@ -1992,6 +2008,12 @@ fn try_batch_send(
 
     for action in actions {
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
+
+        // make sure the sender is not accidentally sending tokens to the sscrt contract address
+        if recipient == env.contract.address {
+            return Err(StdError::generic_err(SEND_TO_SSCRT_CONTRACT_MSG));
+        }
+
         let (received_notification, spent_notification) = try_send_impl(
             &mut deps,
             rng,
@@ -2122,6 +2144,11 @@ fn try_transfer_from_impl(
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
 
     use_allowance(deps.storage, env, owner, spender, raw_amount)?;
+
+    // make sure the sender is not accidentally sending tokens to the sscrt contract address
+    if *recipient == env.contract.address {
+        return Err(StdError::generic_err(SEND_TO_SSCRT_CONTRACT_MSG));
+    }
 
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
