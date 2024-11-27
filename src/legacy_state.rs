@@ -113,6 +113,33 @@ pub fn get_old_transfers(
     txs
 }
 
+pub fn get_all_old_transfers(
+    api: &dyn Api,
+    storage: &dyn Storage,
+    for_address: &CanonicalAddr,
+) -> StdResult<Vec<Tx>> {
+    let store = ReadonlyPrefixedStorage::multilevel(storage, &[PREFIX_TXS, for_address.as_slice()]);
+
+    // Try to access the storage of txs for the account.
+    // If it doesn't exist yet, return an empty list of transfers.
+    let store = if let Some(result) = AppendStore::<StoredTx, _>::attach(&store) {
+        result?
+    } else {
+        return Ok(vec![]);
+    };
+
+    // Take `page_size` txs starting from the latest tx, potentially skipping `page * page_size`
+    // txs from the start.
+    let tx_iter = store
+        .iter()
+        .rev();
+    // The `and_then` here flattens the `StdResult<StdResult<Tx>>` to an `StdResult<Tx>`
+    let txs: StdResult<Vec<Tx>> = tx_iter
+        .map(|tx| tx.map(|tx| tx.into_humanized(api)).and_then(|x| x))
+        .collect();
+    txs
+}
+
 // Config
 
 #[derive(Serialize, Debug, Deserialize, Clone, PartialEq, JsonSchema)]

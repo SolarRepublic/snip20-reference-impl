@@ -228,3 +228,5 @@ pub static INTERNAL_SECRET: Item<Vec<u8>> = Item::new(b"internal-secret");
 // SNIP-52 channels
 pub static CHANNELS: Keyset<String> = Keyset::new(b"channel-ids");
 
+// SNIP-52 status
+pub static NOTIFICATIONS_ENABLED: Item<bool> = Item::new(b"notify-status");

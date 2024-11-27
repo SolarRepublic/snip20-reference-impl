@@ -11,6 +11,7 @@ use secret_toolkit::{notification::ChannelInfoData, permit::Permit};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct MigrateMsg {
+    pub refund_transfers_to_contract: bool,
 }
 
 #[cfg_attr(test, derive(Eq, PartialEq))]
@@ -287,6 +288,12 @@ pub enum ExecuteMsg {
         #[cfg(feature = "gas_evaporation")]
         gas_target: Option<Uint64>,
     },
+    /// Enable or disable SNIP-52 notifications
+    SetNotificationStatus {
+        enabled: bool,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+    },
 
     // Permit
     RevokePermit {
@@ -399,6 +406,9 @@ pub enum ExecuteAnswer {
         status: ResponseStatus,
     },
     RemoveSupportedDenoms {
+        status: ResponseStatus,
+    },
+    SetNotificationStatus {
         status: ResponseStatus,
     },
 

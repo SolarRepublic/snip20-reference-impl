@@ -12,7 +12,6 @@ const ZERO_ADDR: [u8; 20] = [0u8; 20];
 //  recvd = [
 //      amount: biguint,   ; transfer amount in base denomination
 //      sender: bstr,      ; byte sequence of sender's canonical address
-//      balance: biguint   ; recipient's new balance after the transfer
 //  ]
 
 #[derive(Serialize, Debug, Deserialize, Clone)]
