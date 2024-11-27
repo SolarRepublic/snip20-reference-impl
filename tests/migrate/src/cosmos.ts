@@ -18,8 +18,6 @@ export function balance(k_eoa: ExternallyOwnedAccount, xg_amount: bigint): void 
 }
 
 export function bank(k_eoa: ExternallyOwnedAccount, xg_amount: bigint): void {
-	// console.log(`${k_eoa.alias} <== ${k_eoa.bank} + ${xg_amount} == ${k_eoa.bank + xg_amount}`);
-
 	k_eoa.bank += xg_amount;
 
 	// cannot be negative

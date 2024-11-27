@@ -1,6 +1,7 @@
 import type {JsonObject} from '@blake.regalia/belt';
 import type {WeakSecretAccAddr} from '@solar-republic/neutrino';
 import type { WeakUintStr } from '@solar-republic/types';
+import type { O, U } from 'ts-toolbelt';
 
 type ArgTypeMap = {
 	string: string;
@@ -53,7 +54,33 @@ export type Snip20TransferEvent = {
 	};
 };
 
+// export type Snip250TxAction = {
+// 	transfer: {
+// 		from: WeakSecretAccAddr;
+// 		sender: WeakSecretAccAddr;
+// 		recipient: WeakSecretAccAddr;
+// 	};
+// } | {
+// 	mint: {
+// 		minter: WeakSecretAccAddr;
+// 		recipient: WeakSecretAccAddr;
+// 	};
+// } | {
+// 	burn: {
+// 		burner: WeakSecretAccAddr;
+// 		owner: WeakSecretAccAddr;
+// 	};
+// } | {
+// 	deposit: {};
+// } | {
+// 	redeem: {};
+// } | {
+// 	migration: {};
+// };
+
 export type Snip250TxEvent = {
+	// action: O.Optional<U.Merge<Snip250TxEvent['action']>>;
+	// action: O.Optional<U.Merge<Snip250TxAction>>;
 	action: {
 		transfer: {
 			from: WeakSecretAccAddr;
@@ -76,10 +103,12 @@ export type Snip250TxEvent = {
 		redeem: {};
 	} | {
 		migration: {};
-	};
+	}
 
 	coins: {
 		denom: string;
 		amount: WeakUintStr;
 	};
 };
+
+export type Snip250Action = O.Optional<U.Merge<Snip250TxEvent['action']>>;

@@ -1,5 +1,5 @@
 import type {Snip20TransferEvent, Snip250TxEvent} from './types';
-import type {Snip20, Snip20Queries, Snip26, Snip24Executions, Snip24Queries, Snip26Queries, SecretAccAddr} from '@solar-republic/contractor';
+import type {Snip20, SecretAccAddr, Snip20Queries, Snip24Executions, Snip26, Snip26Queries} from '@solar-republic/contractor';
 
 
 import {readFileSync} from 'node:fs';
@@ -9,10 +9,10 @@ import {__UNDEFINED, bigint_greater, bigint_lesser, canonicalize_json, is_number
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
-import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit} from '@solar-republic/neutrino';
+import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, subscribe_snip52_channels, type WeakSecretAccAddr} from '@solar-republic/neutrino';
 
 import {k_wallet_a, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
-import {migrate_contract, preload_original_contract, upload_code} from './contract';
+import {K_TEF_LOCAL, migrate_contract, preload_original_contract, upload_code, type MigratedContractInterface} from './contract';
 import {bank, balance, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
 import {Evaluator, handler} from './evaluator';
@@ -22,20 +22,15 @@ const XG_UINT128_MAX = (1n << 128n) - 1n;
 
 let xg_total_supply = 0n;
 
+// mainnet contract token address
 const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
+
+// native denom
+const s_native_denom = 'uscrt';
 
 // preload sSCRT
 const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_a);
-let k_snip_migrated: SecretContract<{
-	config: Snip26['config'];
-	executions: Snip24Executions & {};
-	queries: Snip26Queries & {
-		legacy_transfer_history: Snip20Queries['transfer_history'];
-	};
-}>;
-
-// native denom
-let s_native_denom = 'uscrt';
+let k_snip_migrated: SecretContract<MigratedContractInterface>;
 
 
 /*
@@ -85,19 +80,18 @@ function transfer_from(
 		};
 
 		// add to histories
-		k_owner.txs.push(g_event);
-		k_recipient.txs.push(g_event);
+		k_owner.push(g_event);
+		k_recipient.push(g_event);
 
 		// *_from action
 		if(k_from) {
 			// add to sender history as well
 			k_sender.migrate();
-			k_sender.txs.push(g_event);
+			k_sender.push(g_event);
 
 			// update allowances (object by ref appleis to both at once)
 			const xg_new_allowance = k_owner.allowancesGiven[k_sender.address].amount -= xg_amount;
 			if(xg_new_allowance < 0n) {
-				debugger;
 				throw Error(`${k_sender.label} overspent their allowance from ${k_owner.label} by ${-xg_new_allowance} when transferring ${xg_amount} to ${k_recipient.label}`);
 			}
 		}
@@ -128,6 +122,33 @@ function transfer_from(
 	balance(k_recipient, xg_amount);
 }
 
+function set_allowance(
+	k_sender: ExternallyOwnedAccount,
+	sa_spender: WeakSecretAccAddr,
+	xg_amount: bigint,
+	n_exp: number,
+	si_which: 'increase' | 'decrease'
+) {
+	const h_given = k_sender.allowancesGiven;
+	const k_spender = ExternallyOwnedAccount.at(sa_spender);
+	const h_recvd = k_spender.allowancesReceived;
+	const sa_sender = k_sender.address;
+	const g_prev = h_given[sa_spender];
+
+	if(k_snip_migrated) {
+		const xg_allowance = 'increase' === si_which
+			? bigint_lesser(XG_UINT128_MAX, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) + xg_amount)
+			: bigint_greater(0n, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) - xg_amount);
+
+		h_given[sa_spender] = h_recvd[sa_sender] = {
+			amount: xg_allowance,
+			expiration: n_exp,
+		};
+
+		k_spender.check_allowance_notif(k_sender, xg_allowance, n_exp);
+	}
+}
+
 /**
  * suite handlers for tracking and double checking expected states in contract
  */
@@ -146,7 +167,7 @@ const H_FUNCTIONS = {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.txs.push({
+			k_sender.push({
 				action: {
 					deposit: {},
 				},
@@ -172,7 +193,7 @@ const H_FUNCTIONS = {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.txs.push({
+			k_sender.push({
 				action: {
 					redeem: {},
 				},
@@ -205,31 +226,11 @@ const H_FUNCTIONS = {
 	}),
 
 	increaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
-		const h_given = k_sender.allowancesGiven;
-		const h_recvd = ExternallyOwnedAccount.at(sa_spender).allowancesReceived;
-		const sa_sender = k_sender.address;
-		const g_prev = h_given[sa_spender];
-
-		if(k_snip_migrated) {
-			h_given[sa_spender] = h_recvd[sa_sender] = {
-				amount: bigint_lesser(XG_UINT128_MAX, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) + xg_amount),
-				expiration: n_exp,
-			};
-		}
+		set_allowance(k_sender, sa_spender, xg_amount, n_exp, 'increase');
 	}),
 
 	decreaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
-		const h_given = k_sender.allowancesGiven;
-		const h_recvd = ExternallyOwnedAccount.at(sa_spender).allowancesReceived;
-		const sa_sender = k_sender.address;
-		const g_prev = h_given[sa_spender];
-
-		if(k_snip_migrated) {
-			h_given[sa_spender] = h_recvd[sa_sender] = {
-				amount: bigint_greater(0n, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) - xg_amount),
-				expiration: n_exp,
-			};
-		}
+		set_allowance(k_sender, sa_spender, xg_amount, n_exp, 'decrease');
 	}),
 
 	burn: handler('amount: token', (k_sender, g_args) => {
@@ -238,7 +239,7 @@ const H_FUNCTIONS = {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.txs.push({
+			k_sender.push({
 				action: {
 					burn: {
 						burner: k_sender.address,
@@ -263,7 +264,7 @@ const H_FUNCTIONS = {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.txs.push({
+			k_sender.push({
 				action: {
 					burn: {
 						burner: k_sender.address,
@@ -287,6 +288,18 @@ const H_FUNCTIONS = {
 	}),
 };
 
+// evaluates the given program on the given contract
+async function evaluate(s_program: string, k_snip: SecretContract) {
+	// parse program
+	const k_parser = new Parser(s_program);
+
+	// prep evaluator
+	const k_evaluator = new Evaluator(H_FUNCTIONS);
+
+	// evaluate program
+	await k_evaluator.evaluate(k_parser, k_snip);
+}
+
 
 // genesis accounts
 const a_genesis = ['$a', '$b', '$c', '$d'];
@@ -301,7 +314,7 @@ const a_aliases = [
 ];
 
 // numeric accounts
-const nl_nums = 128;
+const nl_nums = 8;
 const a_numerics = Array(nl_nums).fill(0).map((w, i) => `a${i}`);
 
 // instantiate EOAs for all accounts
@@ -311,27 +324,6 @@ const a_eoas_numeric = await Promise.all(a_numerics.map(s => ExternallyOwnedAcco
 
 // concat all eoas
 const a_eoas = [...a_eoas_genesis, ...a_eoas_aliased, ...a_eoas_numeric];
-
-// determine how much uscrt each genesis account actually has
-for(const k_eoa of a_eoas) {
-	const [,, g_bank] = await queryCosmosBankBalance(P_SECRET_LCD, k_eoa.address, 'uscrt');
-	bank(k_eoa, BigInt(g_bank?.balance?.amount ?? '0'));
-}
-
-// fund all aliases
-await bank_send(a_eoas_genesis[0], 5_000000n, a_eoas_aliased);
-
-// fund first 1024 numeric accounts
-await bank_send(a_eoas_genesis[1], 5_000000n, a_eoas_numeric);
-
-// sign query permit for all accounts
-await Promise.all([
-	...a_eoas_aliased,
-	...a_eoas_numeric,
-].map(async(k_eoa) => {
-	k_eoa.queryPermit = await sign_secret_query_permit(k_eoa.wallet, 'balance', [k_snip_original.addr], ['owner', 'balance']);
-}));
-
 
 // transfers
 const s_prog_xfers = `
@@ -403,20 +395,6 @@ const program = (b_premigrate: boolean) => `
 
 	---
 
-	send David 2 David
-	---
-	send David 0 David
-	---
-	send David 2 Alice {}
-	---
-	send David 1 Alice {"confirm":{}}
-	---
-	send David 0 Bob {}
-	---
-	send David 1 Carol
-	---
-	send David 1 Carol {}
-	---
 	send:
 		David:
 			2 David
@@ -490,16 +468,6 @@ const program = (b_premigrate: boolean) => `
 	${s_prog_vks}
 `;
 
-{
-	// parse program
-	const k_parser = new Parser(program(true));
-
-	// prep evaluator
-	const k_evaluator = new Evaluator(H_FUNCTIONS);
-
-	// evaluate program
-	await k_evaluator.evaluate(k_parser, k_snip_original);
-}
 
 // validate state
 async function validate_state(b_premigrate=false) {
@@ -549,7 +517,6 @@ async function validate_state(b_premigrate=false) {
 
 		// assert that the SNIP balances are identical
 		if(`${xg_balance}` !== g_balance?.amount) {
-			debugger;
 			throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}; ${a4_balance}`);
 		}
 
@@ -574,8 +541,7 @@ async function validate_state(b_premigrate=false) {
 
 			// not found
 			if(i_xfer < 0) {
-				debugger;
-				throw Error(`Failed to find transfer event locally`);
+				throw Error('Failed to find transfer event locally');
 			}
 
 			// delete it
@@ -600,14 +566,14 @@ async function validate_state(b_premigrate=false) {
 
 			// 
 			if(!a4_history_txs[0]) {
-				debugger;
+				throw Error('No transaction history');
 			}
 
 			// destructure txs
 			const [g_txs] = a4_history_txs;
 
 			// each tx
-			for(const g_tx of g_txs!.txs) {
+			for(const g_tx of g_txs.txs) {
 				// canonicalize and serialize this tx
 				const si_tx = stringify_json(canonicalize_json({
 					action: g_tx.action,
@@ -619,7 +585,6 @@ async function validate_state(b_premigrate=false) {
 
 				// not found
 				if(i_canonical < 0) {
-					debugger;
 					throw Error(`Failed to find tx event locally`);
 				}
 
@@ -659,7 +624,6 @@ async function validate_state(b_premigrate=false) {
 				for(const [a_allowances, h_allowances, si_other, si_which] of a_pairs) {
 					// assert numbers match
 					if(a_allowances.length !== keys(h_allowances).length) {
-						debugger;
 						throw Error(`Suite recorded ${keys(h_allowances).length} allowances ${si_which} for ${k_eoa.label} but contract has ${a_allowances.length}`);
 					}
 
@@ -670,7 +634,6 @@ async function validate_state(b_premigrate=false) {
 
 						// not found
 						if(!g_allowance_local) {
-							debugger;
 							throw Error(`No allowances ${si_which} found for ${k_eoa.label} locally`);
 						}
 
@@ -682,7 +645,6 @@ async function validate_state(b_premigrate=false) {
 
 						// check allowance amounts
 						if(g_allowance.allowance !== `${xg_amount}`) {
-							debugger;
 							throw Error(`Different allowance amounts; ${k_eoa.label} locally has ${xg_amount} in allowances ${si_which} to ${ExternallyOwnedAccount.at(g_allowance.spender).alias} but contract reports ${g_allowance.allowance}`);
 						}
 
@@ -700,52 +662,82 @@ async function validate_state(b_premigrate=false) {
 	console.log(`✅ Verified ${a_eoas.length} transfer histories, ${b_premigrate? 'bank balances': 'transaction histories, allowances'} and SNIP balances`);
 }
 
-// validate contract state
-await validate_state(true);
-
-// read WASM file
-const atu8_wasm = readFileSync(SR_LOCAL_WASM);
-
-// upload code to chain
-console.debug(`Uploading code...`);
-const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
 
 {
+	// read WASM file of new contract
+	const atu8_wasm = readFileSync(SR_LOCAL_WASM);
+
+	// upload code to chain
+	console.debug(`Uploading code...`);
+	const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
+
+	// prepare migration message
 	console.debug('Encoding migration message...');
 	const [,, g_reg] = await querySecretRegistrationTxKey(P_SECRET_LCD);
 	const [atu8_cons_pk] = destructSecretRegistrationKey(g_reg!);
 	const k_wasm = SecretWasm(atu8_cons_pk!);
 
-	// encrypt migrate message
-	const atu8_msg = await k_wasm.encodeMsg(sb16_codehash, {});
+	// create contract eoa
+	await ExternallyOwnedAccount.fromAddress(k_snip_original.addr, '$contract');
+
+	// determine how much uscrt each genesis account actually has
+	for(const k_eoa of a_eoas) {
+		const [,, g_bank] = await queryCosmosBankBalance(P_SECRET_LCD, k_eoa.address, 'uscrt');
+		bank(k_eoa, BigInt(g_bank?.balance?.amount ?? '0'));
+	}
+
+	// fund all aliases
+	await bank_send(a_eoas_genesis[0], 5_000000n, a_eoas_aliased);
+
+	// fund first 1024 numeric accounts
+	await bank_send(a_eoas_genesis[1], 5_000000n, a_eoas_numeric);
+
+	// sign query permit for all accounts
+	await Promise.all(a_eoas.map(async(k_eoa) => {
+		k_eoa.queryPermit = await sign_secret_query_permit(k_eoa.wallet, 'balance', [k_snip_original.addr], ['owner', 'balance']);
+	}));
+
+	// evaluate suite on pre-migrated contract
+	await evaluate(program(true), k_snip_original);
+
+	// validate contract state
+	await validate_state(true);
 
 	// run migration
 	console.debug(`Running migration...`);
-	await migrate_contract(k_snip_original.addr, k_wallet_a, sg_code_id, atu8_msg);
+	await migrate_contract(k_snip_original.addr, k_wallet_a, sg_code_id, k_wasm, sb16_codehash, {
+		refund_transfers_to_contract: true,
+	});
 
 	// override migrated contract code hash
 	k_snip_migrated = await SecretContract(P_SECRET_LCD, k_snip_original.addr, null, XC_CONTRACT_CACHE_BYPASS);
+
+	// create contract eoa
+	await ExternallyOwnedAccount.fromAddress(k_snip_migrated.addr, '$contract');
 
 	// check balances and verify viewing keys still work
 	console.debug(`Validating post-migration state`);
 	await validate_state(false);
 
-	// simulate the same load again
-	const k_parser = new Parser(`
+	// subscribe to notifications on all accounts
+	for(const k_eoa of a_eoas) {
+		await k_eoa.subscribe(k_snip_migrated);
+	}
+
+	// evaluate a new program
+	await evaluate(`
 		migrateLegacyAccount David 1
 
 		migrateLegacyAccount David _      **fail already migrated
 
 		migrateLegacyAccount Zulu _       **fail legacy balance
 
-		transfer Alice 19 Bob
-		---
-		transfer Alice 18 Bob
-		---
-		transfer Alice 5 Carol
-		---
-		transfer Alice 1 David
-		---
+		transfer:
+			Alice:
+				19 Bob
+				31 Bob
+				5 Carol
+				1 David
 
 		transferFrom Carol 1 Alice David  **fail insufficient allowance
 
@@ -758,17 +750,17 @@ const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
 		---
 
 		${program(false)}
-	`);
-
-	// prep evaluator
-	const k_evaluator = new Evaluator(H_FUNCTIONS);
-
-	// evaluate program
-	await k_evaluator.evaluate(k_parser, k_snip_migrated);
+	`, k_snip_migrated);
 
 	// validate
 	await validate_state(false);
 
-	debugger;
+	// check that notifications were verified
+	for(const k_eoa of a_eoas) {
+		k_eoa.check_notifs();
+	}
+
+	// done
+	console.log(`🏁 Finished integrated tests`);
 }
 

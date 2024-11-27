@@ -1,5 +1,5 @@
-import type {JsonObject} from '@blake.regalia/belt';
-import type {SecretContractInterface, Snip24, FungibleTransferCall, Snip20} from '@solar-republic/contractor';
+import type {JsonObject, JsonValue} from '@blake.regalia/belt';
+import type {SecretContractInterface, Snip24, FungibleTransferCall, Snip20, Snip20Queries, Snip24Executions, Snip26, Snip26Queries} from '@solar-republic/contractor';
 import type {EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
 import type {TxResultTuple, Wallet, WeakSecretAccAddr} from '@solar-republic/neutrino';
 import type {CwHexLower, CwUint64, WeakUint128Str, WeakUintStr} from '@solar-republic/types';
@@ -17,6 +17,38 @@ import {bech32_decode, random_bytes} from '@solar-republic/crypto';
 import {SecretContract, SecretWasm, TendermintEventFilter, broadcast_result, create_and_sign_tx_direct, exec_fees, random_32} from '@solar-republic/neutrino';
 
 import {X_GAS_PRICE, P_SECRET_LCD, P_SECRET_RPC, k_wallet_a, P_MAINNET_LCD, k_wallet_admin} from './constants';
+
+export type MigratedContractInterface = {
+	config: Snip26['config'] & {
+		snip52_channels: {
+			recvd: {
+				cbor: [
+					amount: bigint,
+					sender: Uint8Array,
+				];
+			};
+			spent: {
+				cbor: [
+					amount: bigint,
+					actions: number,
+					recipient: Uint8Array,
+					balance: bigint,
+				];
+			};
+			allowance: {
+				cbor: [
+					amount: bigint,
+					allower: Uint8Array,
+					expiration: number,
+				];
+			};
+		};
+	};
+	executions: Snip24Executions & {};
+	queries: Snip26Queries & {
+		legacy_transfer_history: Snip20Queries['transfer_history'];
+	};
+};
 
 export const K_TEF_LOCAL = await TendermintEventFilter(P_SECRET_RPC);
 
@@ -242,8 +274,13 @@ export async function migrate_contract(
 	sa_contract: WeakSecretAccAddr,
 	k_wallet: Wallet<'secret'>,
 	sg_code_id: WeakUintStr,
-	atu8_msg: Uint8Array
+	k_wasm: SecretWasm,
+	sb16_codehash: CwHexLower,
+	g_msg: JsonValue={},
 ) {
+	// encrypt migrate message
+	const atu8_body = await k_wasm.encodeMsg(sb16_codehash, g_msg);
+
 	// execute migrate message
 	const [xc_code, sx_res, g_meta, atu8_data, h_events] = await exec(k_wallet, encodeGoogleProtobufAny(
 		SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_MIGRATE_CONTRACT,
@@ -251,7 +288,7 @@ export async function migrate_contract(
 			k_wallet.addr,
 			sa_contract,
 			sg_code_id,
-			atu8_msg
+			atu8_body
 		)
 	), 600_000n);
 
@@ -261,14 +298,13 @@ export async function migrate_contract(
 		// encrypted error message
 		const m_response = /(\d+):(?: \w+:)*? encrypted: (.+?): (.+?) contract/.exec(s_error);
 		if(m_response) {
-			debugger;
-			// // destructure match
-			// const [, s_index, sb64_encrypted, si_action] = m_response;
+			// destructure match
+			const [, s_index, sb64_encrypted, si_action] = m_response;
 
-			// // decrypt ciphertext
-			// const atu8_plaintext = await k_wasm.decrypt(base64_to_bytes(sb64_encrypted), atu8_body.slice(0, 32));
+			// decrypt ciphertext
+			const atu8_plaintext = await k_wasm.decrypt(base64_to_bytes(sb64_encrypted), atu8_body.slice(0, 32));
 
-			// throw Error(bytes_to_text(atu8_plaintext));
+			throw Error(`During ${si_action} action at message #${s_index}: ${bytes_to_text(atu8_plaintext)}`);
 		}
 
 		throw Error(s_error);

@@ -189,7 +189,6 @@ export class Evaluator {
 					if(is_undefined(z_value)) delete g_args_raw[s_name];
 				}
 				catch(e_cast) {
-					debugger;
 					throw Error(`While trying to cast to ${s_type} on ${s_name} := ${a_args[i_param]}: ${e_cast}`);
 				}
 			}) ?? []);
@@ -240,10 +239,6 @@ export class Evaluator {
 					if(xc_code) {
 						const [s_error, i_message] = a_error!;
 
-						// for(const [atu8_msg, atu8_nonce_local] of a_execs) {
-						// 	console.log(bytes_to_base64(atu8_msg));
-						// }
-
 						// expecting failure
 						if(b_fail) {
 							// does not contain error string
@@ -256,19 +251,13 @@ export class Evaluator {
 						}
 						// not expecting failure
 						else {
-							// const g_balance = await queryCosmosBankBalance(P_SECRET_LCD, await resolve_account_addr(g_statement.sender), 'uscrt');
 							debugger;
-							// console.log(g_balance, a_error);
-
-							// // console.error(`Failed to execute: ${stringify_json(a_stmts_local)}\n\t${s_error}`);
-							// debugger;
 							throw Error(s_error ?? g_meta?.log ?? sx_res);
 						}
 					}
 
 					// was expecting failure
 					if(b_fail) {
-						debugger;
 						throw Error(`Was expecting tx to fail but it succeeded`);
 					}
 
