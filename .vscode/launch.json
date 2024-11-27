@@ -12,7 +12,10 @@
 			"program": "${file}",
 			"cwd": "${workspaceFolder}",
 			"stopOnEntry": false,
-			"watchMode": false
+			"watchMode": false,
+			"runtimeArgs": [
+				"--env-file=./tests/migrate/.env"
+			]
 		},
 		{
 			"type": "bun",
