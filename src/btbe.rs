@@ -512,7 +512,7 @@ pub fn stored_tx_count(storage: &dyn Storage, entry: &Option<StoredEntry>) -> St
 
 // merges a dwb entry into the current node's bucket
 // `amount_spent` is any required subtraction due to being sender of tx
-pub fn merge_dwb_entry(
+pub fn store_and_merge_dwb_entry(
     storage: &mut dyn Storage,
     dwb_entry: &mut DelayedWriteBufferEntry,
     amount_spent: Option<u128>,
@@ -869,7 +869,7 @@ mod tests {
 
             let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-            let _result = merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
+            let _result = store_and_merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
 
             let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
             assert_eq!(btbe_node_count, 1);
@@ -898,7 +898,7 @@ mod tests {
 
         let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-        let _result = merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
+        let _result = store_and_merge_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
 
         let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
         assert_eq!(btbe_node_count, 3);

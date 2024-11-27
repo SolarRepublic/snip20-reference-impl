@@ -6,7 +6,7 @@ use secret_toolkit_crypto::ContractPrng;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::btbe::{merge_dwb_entry, stored_balance};
+use crate::btbe::{store_and_merge_dwb_entry, stored_balance};
 use crate::legacy_state;
 use crate::state::{safe_add, safe_add_u64, CONFIG};
 use crate::transaction_history::{store_migration_action, Tx, TRANSACTIONS};
@@ -90,6 +90,7 @@ impl DelayedWriteBuffer {
         op_name: &str,
         #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
         block: &BlockInfo, // added for migration
+        repeat_event: bool,
     ) -> StdResult<u128> {
         #[cfg(feature = "gas_tracking")]
         let mut group1 = tracker.group("settle_sender_or_owner_account.1");
@@ -100,6 +101,7 @@ impl DelayedWriteBuffer {
         #[cfg(feature = "gas_tracking")]
         group1.log("release_dwb_recipient");
 
+        // check that the owner has sufficient funds to perform the transfer
         let checked_balance = balance.checked_sub(amount_spent);
         if checked_balance.is_none() {
             return Err(StdError::generic_err(format!(
@@ -107,12 +109,18 @@ impl DelayedWriteBuffer {
             )));
         };
 
+        // record the event in the dwb entry
         dwb_entry.add_tx_node(store, tx_id)?;
+
+        // record it again because a *_from was executed where sender and owner were the same
+        if repeat_event {
+            dwb_entry.add_tx_node(store, tx_id)?;
+        }
 
         #[cfg(feature = "gas_tracking")]
         group1.log("add_tx_node");
 
-        //let mut entry = dwb_entry.clone();
+        // set the recipient on the dwb entry (in case it was a dummy entry)
         dwb_entry.set_recipient(address)?;
 
         #[cfg(feature = "gas_tracking")]
@@ -122,7 +130,8 @@ impl DelayedWriteBuffer {
             dwb_entry.amount()?
         ));
 
-        merge_dwb_entry(
+        // merge the entry into the btbe
+        store_and_merge_dwb_entry(
             store,
             &mut dwb_entry,
             Some(amount_spent),
@@ -286,7 +295,7 @@ impl DelayedWriteBuffer {
         // settle the entry
         let mut dwb_entry = self.entries[actual_settle_index];
     
-        merge_dwb_entry(
+        store_and_merge_dwb_entry(
             store,
             &mut dwb_entry,
             None,

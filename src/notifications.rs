@@ -2,17 +2,56 @@ use std::collections::HashMap;
 
 use cosmwasm_std::{Addr, Api, Binary, CanonicalAddr, StdError, StdResult};
 use primitive_types::{U256, U512};
-use secret_toolkit::notification::{get_seed, notification_id, xor_bytes, Notification, NotificationData};
-use minicbor_ser as cbor;
+use secret_toolkit::notification::{get_seed, notification_id, xor_bytes, Notification, NotificationData, cbor_to_std_error};
+use minicbor::{data as cbor_data, encode as cbor_encode, Encoder};
 use secret_toolkit_crypto::{hkdf_sha_512, sha_256};
 use serde::{Deserialize, Serialize};
 
 const ZERO_ADDR: [u8; 20] = [0u8; 20];
 
-//  recvd = [
-//      amount: biguint,   ; transfer amount in base denomination
-//      sender: bstr,      ; byte sequence of sender's canonical address
-//  ]
+const CBL_ARRAY: usize = 1 + 1;
+const CBL_U32: usize = 1 + 4;
+const CBL_BIGNUM_U64: usize = 1 + 8;
+const CBL_TIMESTAMP: usize = 1 + 8;
+const CBL_ADDRESS: usize = 1 + 20;
+
+pub trait EncoderExt {
+    fn bignum_u64(&mut self, value: u128) -> StdResult<&mut Self>;
+    fn address(&mut self, value: CanonicalAddr) -> StdResult<&mut Self>;
+    fn slice(&mut self, value: &[u8]) -> StdResult<&mut Self>;
+    fn timestamp(&mut self, value: u64) -> StdResult<&mut Self>;
+}
+
+impl<T: cbor_encode::Write> EncoderExt for Encoder<T> {
+    fn bignum_u64(&mut self, value: u128) -> StdResult<&mut Self> {
+        self
+            .tag(cbor_data::Tag::from(cbor_data::IanaTag::PosBignum))
+                .map_err(cbor_to_std_error)?
+            .slice(&value.to_be_bytes()[8..])
+    }
+
+    fn address(&mut self, value: CanonicalAddr) -> StdResult<&mut Self> {
+        self.slice(&value.as_slice())
+    }
+
+    fn slice(&mut self, value: &[u8]) -> StdResult<&mut Self> {
+        self
+            .bytes(&value)
+                .map_err(cbor_to_std_error)?;
+        
+        Ok(self)
+    }
+
+    fn timestamp(&mut self, value: u64) -> StdResult<&mut Self> {
+        self
+            .tag(cbor_data::Tag::from(cbor_data::IanaTag::Timestamp))
+                .map_err(cbor_to_std_error)?
+            .u64(value)
+                .map_err(cbor_to_std_error)?;
+
+        Ok(self)
+    }
+}
 
 #[derive(Serialize, Debug, Deserialize, Clone)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
@@ -24,18 +63,20 @@ pub struct ReceivedNotificationData {
 impl NotificationData for ReceivedNotificationData {
 	const CHANNEL_ID: &'static str = "recvd";
 	const CDDL_SCHEMA: &'static str = "recvd=[amount:biguint,sender:bstr]";
+    const ELEMENTS: u64 = 2;
+    const PAYLOAD_SIZE: usize = CBL_ARRAY + CBL_BIGNUM_U64 + CBL_ADDRESS;
 
-    fn to_cbor(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
-        let received_data;
+    fn encode_cbor(&self, api: &dyn Api, encoder: &mut Encoder<&mut [u8]>) -> StdResult<()> {
+        encoder.bignum_u64(self.amount)?;
+
         if let Some(sender) = &self.sender {
             let sender_raw = api.addr_canonicalize(sender.as_str())?;
-            received_data = cbor::to_vec(&(self.amount.to_be_bytes(), sender_raw.as_slice()))
-                .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
+            encoder.address(sender_raw)?;
         } else {
-            received_data = cbor::to_vec(&(self.amount.to_be_bytes(), ZERO_ADDR))
-                .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
+            encoder.slice(&ZERO_ADDR)?;
         }
-        Ok(received_data)
+
+        Ok(())
     }
 }
 
@@ -43,7 +84,7 @@ impl NotificationData for ReceivedNotificationData {
 //     amount: biguint,   ; transfer amount in base denomination
 //     actions: uint      ; number of actions the execution performed
 //     recipient: bstr,   ; byte sequence of first recipient's canonical address
-//     balance: biguint   ; sender's new balance aactions: uint      ; number of actions the execution performedfter the transfer
+//     balance: biguint   ; sender's new balance aactions
 // ]
 
 #[derive(Serialize, Debug, Deserialize, Clone)]
@@ -55,30 +96,28 @@ pub struct SpentNotificationData {
     pub balance: u128,
 }
 
+
 impl NotificationData for SpentNotificationData {
     const CHANNEL_ID: &'static str = "spent";
 	const CDDL_SCHEMA: &'static str = "spent=[amount:biguint,actions:uint,recipient:bstr,balance:biguint]";
-    fn to_cbor(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
-        let spent_data;
+    const ELEMENTS: u64 = 4;
+    const PAYLOAD_SIZE: usize = CBL_ARRAY + CBL_BIGNUM_U64 + CBL_U32 + CBL_ADDRESS + CBL_BIGNUM_U64;
+
+    fn encode_cbor(&self, api: &dyn Api, encoder: &mut Encoder<&mut [u8]>) -> StdResult<()> {
+        let mut spent_data = encoder
+            .bignum_u64(self.amount)?
+            .u32(self.actions).map_err(cbor_to_std_error)?;
+
         if let Some(recipient) = &self.recipient {
             let recipient_raw = api.addr_canonicalize(recipient.as_str())?;
-            spent_data = cbor::to_vec(&(
-                self.amount.to_be_bytes(),
-                self.actions.to_be_bytes(),
-                recipient_raw.as_slice(),
-                self.balance.to_be_bytes(),
-            ))
-            .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
+            spent_data = spent_data.address(recipient_raw)?;
         } else {
-            spent_data = cbor::to_vec(&(
-                self.amount.to_be_bytes(),
-                self.actions.to_be_bytes(),
-                ZERO_ADDR,
-                self.balance.to_be_bytes(),
-            ))
-            .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
+            spent_data = spent_data.slice(&ZERO_ADDR)?
         }
-        Ok(spent_data)
+
+        spent_data.bignum_u64(self.balance)?;
+        
+        Ok(())
     }
 }
 
@@ -99,17 +138,18 @@ pub struct AllowanceNotificationData {
 impl NotificationData for AllowanceNotificationData {
     const CHANNEL_ID: &'static str = "allowance";
     const CDDL_SCHEMA: &'static str = "allowance=[amount:biguint,allower:bstr,expiration:uint]";
-    fn to_cbor(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
+    const ELEMENTS: u64 = 3;
+    const PAYLOAD_SIZE: usize = CBL_ARRAY + CBL_BIGNUM_U64 + CBL_ADDRESS + CBL_TIMESTAMP;
+
+    fn encode_cbor(&self, api: &dyn Api, encoder: &mut Encoder<&mut [u8]>) -> StdResult<()> {
         let allower_raw = api.addr_canonicalize(self.allower.as_str())?;
 
-        // use CBOR to encode data
-        let updated_allowance_data = cbor::to_vec(&(
-            self.amount.to_be_bytes(),
-            allower_raw.as_slice(),
-            self.expiration.unwrap_or(0u64), // expiration == 0 means no expiration
-        ))
-        .map_err(|e| StdError::generic_err(format!("{:?}", e)))?;
-        Ok(updated_allowance_data)
+        encoder
+            .bignum_u64(self.amount)?
+            .slice(allower_raw.as_slice())?
+            .timestamp(self.expiration.unwrap_or(0u64))?;
+
+        Ok(())
     }
 }
 

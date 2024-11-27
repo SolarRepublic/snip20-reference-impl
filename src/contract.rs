@@ -21,7 +21,7 @@ use crate::dwb::log_dwb;
 use crate::dwb::{DelayedWriteBuffer, DWB, TX_NODES};
 
 use crate::btbe::{
-    find_start_bundle, initialize_btbe, merge_dwb_entry, stored_balance, stored_entry, stored_tx_count
+    find_start_bundle, initialize_btbe, store_and_merge_dwb_entry, stored_balance, stored_entry, stored_tx_count
 };
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::{GasTracker, LoggingExt};
@@ -171,6 +171,7 @@ pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> StdResult<Response> 
                     &env.block,
                     #[cfg(feature = "gas_tracking")]
                     &mut tracker,
+                    false,
                 )?;
                 receive_sum += tx.coins.amount.u128();
             }
@@ -386,7 +387,7 @@ fn migrate_legacy_account(
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
-    merge_dwb_entry(
+    store_and_merge_dwb_entry(
         deps.storage,
         &mut dwb_entry,
         None,
@@ -1332,7 +1333,7 @@ fn try_batch_mint(
         .transaction
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
-        .hash;
+        .hash.to_ascii_uppercase();
     let received_data = multi_received_data(
         deps.api,
         notifications,
@@ -1606,6 +1607,7 @@ fn try_redeem(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        false,
     )?;
 
     DWB.save(deps.storage, &dwb)?;
@@ -1670,7 +1672,9 @@ fn try_transfer_impl(
         block,
         #[cfg(feature = "gas_tracking")]
         tracker,
+        false,
     )?;
+
     let received_notification = Notification::new(
         recipient.clone(),
         ReceivedNotificationData {
@@ -1737,14 +1741,14 @@ fn try_transfer(
         deps.api,
         &env,
         secret,
-        Some(NOTIFICATION_BLOCK_SIZE),
+        None,
     )?;
 
     let spent_notification = spent_notification.to_txhash_notification(
         deps.api, 
         &env, 
-        secret, 
-        Some(NOTIFICATION_BLOCK_SIZE)
+        secret,
+        None,
     )?;
 
     let mut resp = Response::new()
@@ -1759,6 +1763,31 @@ fn try_transfer(
             spent_notification.id_plaintext(),
             spent_notification.data_plaintext(),
         );
+
+        let tx_hash = env.transaction.unwrap().hash.to_ascii_uppercase();
+        let block_height = env.block.height;
+
+        let channel_id_bytes = sha_256("recvd".as_bytes())[..12].to_vec();
+        let salt_bytes = hex::decode(&tx_hash).unwrap()[..12].to_vec();
+        let nonce: Vec<u8> = channel_id_bytes
+            .iter()
+            .zip(salt_bytes.iter())
+            .map(|(&b1, &b2)| b1 ^ b2)
+            .collect();
+        let aad = format!("{}:{}", block_height, tx_hash);
+
+        resp = resp.add_attribute_plaintext(
+            "wasm.debug", 
+            format!("txhash: {};\nsecret:{:#?};\nsender:{};\nblock:{};\nnonce:\n{:?};\naad:{}\nchannel:{:?};\nsalt:{:?}",
+                tx_hash,
+                secret,
+                info.sender,
+                block_height,
+                nonce,
+                aad,
+                channel_id_bytes,
+                salt_bytes,
+            ))
     }
 
     #[cfg(feature = "gas_tracking")]
@@ -1821,7 +1850,7 @@ fn try_batch_transfer(
         .transaction
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
-        .hash;
+        .hash.to_ascii_uppercase();
     let (received_notifications, spent_notifications): (
         Vec<Notification<ReceivedNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
@@ -2077,7 +2106,7 @@ fn try_batch_send(
         .transaction
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
-        .hash;
+        .hash.to_ascii_uppercase();
 
     let (received_notifications, spent_notifications): (
         Vec<Notification<ReceivedNotificationData>>,
@@ -2206,6 +2235,7 @@ fn try_transfer_from_impl(
         &env.block,
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
+        true,
     )?;
 
     let received_notification = Notification::new(
@@ -2322,7 +2352,7 @@ fn try_batch_transfer_from(
         .transaction
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
-        .hash;
+        .hash.to_ascii_uppercase();
 
     let (received_notifications, spent_notifications): (
         Vec<Notification<ReceivedNotificationData>>,
@@ -2499,7 +2529,7 @@ fn try_batch_send_from(
         .transaction
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
-        .hash;
+        .hash.to_ascii_uppercase();
 
     let (received_notifications, spent_notifications): (
         Vec<Notification<ReceivedNotificationData>>,
@@ -2565,6 +2595,7 @@ fn try_burn_from(
     use_allowance(deps.storage, env, &owner, &info.sender, raw_amount)?;
     let raw_burner = deps.api.addr_canonicalize(info.sender.as_str())?;
 
+    // store the event
     let tx_id = store_burn_action(
         deps.storage,
         raw_owner.clone(),
@@ -2591,7 +2622,10 @@ fn try_burn_from(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        raw_burner == raw_owner,
     )?;
+
+    // sender and owner are different
     if raw_burner != raw_owner {
         // also settle sender's account
         dwb.settle_sender_or_owner_account(
@@ -2603,6 +2637,7 @@ fn try_burn_from(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
             &env.block,
+            false,
         )?;
     }
 
@@ -2696,8 +2731,12 @@ fn try_batch_burn_from(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
             &env.block,
+            raw_spender == raw_owner,
         )?;
+
+        // sender and owner are different
         if raw_spender != raw_owner {
+            // also settle the sender's account
             dwb.settle_sender_or_owner_account(
                 deps.storage,
                 &raw_spender,
@@ -2707,6 +2746,7 @@ fn try_batch_burn_from(
                 #[cfg(feature = "gas_tracking")]
                 &mut tracker,
                 &env.block,
+                false,
             )?;
         }
 
@@ -2738,7 +2778,7 @@ fn try_batch_burn_from(
         .transaction
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
-        .hash;
+        .hash.to_ascii_uppercase();
     let spent_data = multi_spent_data(
         deps.api,
         spent_notifications,
@@ -2998,6 +3038,7 @@ fn try_burn(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        false,
     )?;
 
     DWB.save(deps.storage, &dwb)?;
@@ -3047,6 +3088,7 @@ fn perform_transfer(
     memo: Option<String>,
     block: &BlockInfo,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
+    is_from_action: bool,
 ) -> StdResult<u128> {
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("perform_transfer.1");
@@ -3075,10 +3117,12 @@ fn perform_transfer(
         #[cfg(feature = "gas_tracking")]
         tracker,
         block,
+        is_from_action && sender == from,
     )?;
 
-    // if this is a *_from action, settle the sender's account, too
+    // sender and owner are different
     if sender != from {
+        // settle the sender's account too
         dwb.settle_sender_or_owner_account(
             store,
             sender,
@@ -3088,6 +3132,7 @@ fn perform_transfer(
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            false,
         )?;
     }
 
@@ -3131,8 +3176,9 @@ fn perform_mint(
     // load delayed write buffer
     let mut dwb = DWB.load(store)?;
 
-    // if minter is not recipient, settle them
+    // sender and owner are different
     if minter != to {
+        // settle the sender's account too
         dwb.settle_sender_or_owner_account(
             store,
             minter,
@@ -3142,6 +3188,7 @@ fn perform_mint(
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            false,
         )?;
     }
 
