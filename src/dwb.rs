@@ -102,6 +102,7 @@ impl DelayedWriteBuffer {
         #[cfg(feature = "gas_tracking")]
         group1.log("release_dwb_recipient");
 
+        // check that the owner has sufficient funds to perform the transfer
         let checked_balance = balance.checked_sub(amount_spent);
         if checked_balance.is_none() {
             return Err(StdError::generic_err(format!(
@@ -109,6 +110,7 @@ impl DelayedWriteBuffer {
             )));
         };
 
+        // record the event in the dwb entry
         dwb_entry.add_tx_node(store, tx_id)?;
 
         // *_from action where sender is the owner, repeat the event in history
@@ -119,7 +121,7 @@ impl DelayedWriteBuffer {
         #[cfg(feature = "gas_tracking")]
         group1.log("add_tx_node");
 
-        //let mut entry = dwb_entry.clone();
+        // set the recipient on the dwb entry (in case it was a dummy entry)
         dwb_entry.set_recipient(address)?;
 
         #[cfg(feature = "gas_tracking")]
@@ -129,6 +131,7 @@ impl DelayedWriteBuffer {
             dwb_entry.amount()?
         ));
 
+        // merge the entry into the btbe
         settle_dwb_entry(
             store,
             &mut dwb_entry,
