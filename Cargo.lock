@@ -499,7 +499,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b34d9fd68ae0b74a41b21c03c2f62847aa0ffea044eee893b4c140b37e244e2"
 dependencies = [
  "fixed-hash",
- "uint",
+ "uint 0.9.5",
+]
+
+[[package]]
+name = "primitive-types"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d15600a7d856470b7d278b3fe0e311fe28c2526348549f8ef2ff7db3299c87f5"
+dependencies = [
+ "fixed-hash",
+ "uint 0.10.0",
 ]
 
 [[package]]
@@ -676,7 +686,7 @@ dependencies = [
  "serde",
  "serde-json-wasm",
  "thiserror",
- "uint",
+ "uint 0.9.5",
 ]
 
 [[package]]
@@ -726,7 +736,7 @@ dependencies = [
  "hex",
  "hkdf",
  "minicbor",
- "primitive-types",
+ "primitive-types 0.12.2",
  "ripemd",
  "schemars",
  "secret-cosmwasm-std",
@@ -901,7 +911,7 @@ dependencies = [
  "cosmwasm-schema",
  "hex",
  "minicbor",
- "primitive-types",
+ "primitive-types 0.13.1",
  "rand",
  "schemars",
  "secret-cosmwasm-std",
@@ -990,6 +1000,18 @@ name = "uint"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76f64bba2c53b04fcab63c01a7d7427eadc821e3bc48c34dc9ba29c501164b52"
+dependencies = [
+ "byteorder",
+ "crunchy",
+ "hex",
+ "static_assertions",
+]
+
+[[package]]
+name = "uint"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "909988d098b2f738727b161a106cfc7cab00c539c2687a8836f8e565976fb53e"
 dependencies = [
  "byteorder",
  "crunchy",

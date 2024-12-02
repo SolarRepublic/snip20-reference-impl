@@ -159,15 +159,15 @@ impl NotificationData for AllowanceNotificationData {
 pub const MULTI_RECEIVED_CHANNEL_ID: &str = "multirecvd";
 pub const MULTI_RECEIVED_CHANNEL_BLOOM_K: u32 = 15;
 pub const MULTI_RECEIVED_CHANNEL_BLOOM_N: u32 = 16;
-pub const MULTI_RECEIVED_CHANNEL_PACKET_SIZE: u32 = 24;
+pub const MULTI_RECEIVED_CHANNEL_PACKET_SIZE: usize = 16;
 
 // id for the `multispent` channel
 pub const MULTI_SPENT_CHANNEL_ID: &str = "multispent";
 pub const MULTI_SPENT_CHANNEL_BLOOM_K: u32 = 5;
-pub const MULTI_SPENT_CHANNEL_BLOOM_N: u32 = 4;
-pub const MULTI_SPENT_CHANNEL_PACKET_SIZE: u32 = 40;
+pub const MULTI_SPENT_CHANNEL_BLOOM_N: usize = 4;
+pub const MULTI_SPENT_CHANNEL_PACKET_SIZE: usize = 24;
 
-pub fn multi_received_data(
+pub fn multi_recvd_data(
     api: &dyn Api,
     notifications: Vec<Notification<ReceivedNotificationData>>,
     tx_hash: &String,
@@ -204,17 +204,23 @@ pub fn multi_received_data(
         let recipient_addr_raw = api.addr_canonicalize(notification.notification_for.as_str())?;
         let seed = get_seed(&recipient_addr_raw, secret)?;
         let id = notification_id(&seed, &MULTI_RECEIVED_CHANNEL_ID.to_string(), &tx_hash)?;
-        let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
-        for _ in 0..MULTI_RECEIVED_CHANNEL_BLOOM_K {
-            let bit_index = (hash_bytes & U256::from(0x01ff)).as_usize();
-            received_bloom_filter = received_bloom_filter | (U512::from(1) << bit_index);
-            hash_bytes = hash_bytes >> 9;
+        let hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
+        let bloom_mask: U256 = U256::from(0x1ff);
+        for i in 0..MULTI_RECEIVED_CHANNEL_BLOOM_K {
+            let bit_index = ((hash_bytes >> (256 - 9 - (i * 9))) & bloom_mask).as_usize();
+            received_bloom_filter |= U512::from(1) << bit_index;
         }
 
         // make the received packet
-        let mut received_packet_plaintext: Vec<u8> = vec![];
-        // amount bytes (u128 == 16 bytes)
-        received_packet_plaintext.extend_from_slice(&notification.data.amount.to_be_bytes());
+        let mut packet_plaintext = [0u8; MULTI_RECEIVED_CHANNEL_PACKET_SIZE];
+
+        // amount bytes (u64 == 8 bytes)
+        packet_plaintext[..8].copy_from_slice(
+            &notification.data.amount
+                .clamp(0, u64::MAX as u128)
+                .to_be_bytes()[8..]
+        );
+
         // sender account last 8 bytes
         let sender_bytes: &[u8];
         let sender_raw;
@@ -224,17 +230,30 @@ pub fn multi_received_data(
         } else {
             sender_bytes = &ZERO_ADDR[ZERO_ADDR.len() - 8..];
         }
-        // 24 bytes total
-        received_packet_plaintext.extend_from_slice(sender_bytes);
 
-        let received_packet_id = &id.0.as_slice()[0..8];
-        let received_packet_ikm = &id.0.as_slice()[8..32];
-        let received_packet_ciphertext =
-            xor_bytes(received_packet_plaintext.as_slice(), received_packet_ikm);
-        let received_packet_bytes: Vec<u8> =
-            [received_packet_id.to_vec(), received_packet_ciphertext].concat();
+        // 16 bytes total
+        packet_plaintext[8..].copy_from_slice(sender_bytes);
 
-        received_packets.push((notification.notification_for.clone(), received_packet_bytes));
+        // use top 64 bits of notification ID for packet ID
+        let packet_id = &id.0.as_slice()[0..8];
+
+        // take the bottom bits from the notification ID for key material
+        let packet_ikm = &id.0.as_slice()[8..32];
+
+        // create ciphertext by XOR'ing the plaintext with the notification ID
+        let packet_ciphertext = xor_bytes(
+            &packet_plaintext[..],
+            &packet_ikm[0..MULTI_RECEIVED_CHANNEL_PACKET_SIZE]
+        );
+
+        // construct the packet bytes
+        let packet_bytes: Vec<u8> = [
+            packet_id.to_vec(),
+            packet_ciphertext,
+        ].concat();
+
+        // add to packets data
+        received_packets.push((notification.notification_for.clone(), packet_bytes));
     }
 
     // filter out any notifications for recipients showing up more than once
@@ -243,8 +262,9 @@ pub fn multi_received_data(
         .filter(|(addr, _)| *recipient_counts.get(addr).unwrap_or(&0u16) <= 1)
         .map(|(_, packet)| packet)
         .collect();
+
+    // still too many packets; trim down to size
     if received_packets.len() > MULTI_RECEIVED_CHANNEL_BLOOM_N as usize {
-        // still too many packets
         received_packets = received_packets[0..MULTI_RECEIVED_CHANNEL_BLOOM_N as usize].to_vec();
     }
 
@@ -266,11 +286,11 @@ pub fn multi_received_data(
             // contribute padding packet to bloom filter
             let seed = get_seed(&CanonicalAddr::from(padding_address), secret)?;
             let id = notification_id(&seed, &MULTI_RECEIVED_CHANNEL_ID.to_string(), &tx_hash)?;
-            let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
-            for _ in 0..MULTI_RECEIVED_CHANNEL_BLOOM_K {
-                let bit_index = (hash_bytes & U256::from(0x01ff)).as_usize();
-                received_bloom_filter = received_bloom_filter | (U512::from(1) << bit_index);
-                hash_bytes = hash_bytes >> 9;
+            let hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
+            let bloom_mask: U256 = U256::from(0x1ff);
+            for i in 0..MULTI_RECEIVED_CHANNEL_BLOOM_K {
+                let bit_index = ((hash_bytes >> (256 - 9 - (i * 9))) & bloom_mask).as_usize();
+                received_bloom_filter |= U512::from(1) << bit_index;
             }
 
             // padding packet plaintext
@@ -286,9 +306,8 @@ pub fn multi_received_data(
     }
 
     let mut received_bloom_filter_bytes: Vec<u8> = vec![];
-    for biguint in received_bloom_filter.0 {
-        received_bloom_filter_bytes.extend_from_slice(&biguint.to_be_bytes());
-    }
+    received_bloom_filter_bytes.extend_from_slice(&received_bloom_filter.to_big_endian());
+
     for packet in received_packets {
         received_bloom_filter_bytes.extend(packet.iter());
     }
@@ -328,19 +347,30 @@ pub fn multi_spent_data(
         let spender_addr_raw = api.addr_canonicalize(notification.notification_for.as_str())?;
         let seed = get_seed(&spender_addr_raw, secret)?;
         let id = notification_id(&seed, &MULTI_SPENT_CHANNEL_ID.to_string(), &tx_hash)?;
-        let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
-        for _ in 0..MULTI_SPENT_CHANNEL_BLOOM_K {
-            let bit_index = (hash_bytes & U256::from(0x01ff)).as_usize();
-            spent_bloom_filter = spent_bloom_filter | (U512::from(1) << bit_index);
-            hash_bytes = hash_bytes >> 9;
+        let hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
+        let bloom_mask: U256 = U256::from(0x1ff);
+        for i in 0..MULTI_RECEIVED_CHANNEL_BLOOM_K {
+            let bit_index = ((hash_bytes >> (256 - 9 - (i * 9))) & bloom_mask).as_usize();
+            spent_bloom_filter |= U512::from(1) << bit_index;
         }
 
         // make the spent packet
-        let mut spent_packet_plaintext: Vec<u8> = vec![];
-        // amount bytes (u128 == 16 bytes)
-        spent_packet_plaintext.extend_from_slice(&notification.data.amount.to_be_bytes());
-        // balance bytes (u128 == 16 bytes)
-        spent_packet_plaintext.extend_from_slice(&notification.data.balance.to_be_bytes());
+        let mut packet_plaintext = vec![0u8; MULTI_SPENT_CHANNEL_PACKET_SIZE];
+
+        // amount bytes (u64 == 8 bytes)
+        packet_plaintext.extend_from_slice(
+            &notification.data.amount
+                .clamp(0, u64::MAX as u128)
+                .to_be_bytes()[8..]
+        );
+
+        // balance bytes (u64 == 8 bytes)
+        packet_plaintext.extend_from_slice(
+            &notification.data.amount
+                .clamp(0, u64::MAX as u128)
+                .to_be_bytes()[8..]
+        );
+
         // recipient account last 8 bytes
         let recipient_bytes: &[u8];
         let recipient_raw;
@@ -350,26 +380,37 @@ pub fn multi_spent_data(
         } else {
             recipient_bytes = &ZERO_ADDR[ZERO_ADDR.len() - 8..];
         }
-        // 40 bytes total
-        spent_packet_plaintext.extend_from_slice(recipient_bytes);
 
-        let spent_packet_size = spent_packet_plaintext.len();
-        let spent_packet_id = &id.0.as_slice()[0..8];
-        let spent_packet_ikm = &id.0.as_slice()[8..32];
-        let spent_packet_key = hkdf_sha_512(
-            &Some(vec![0u8; 64]),
-            spent_packet_ikm,
-            "".as_bytes(),
-            spent_packet_size,
-        )?;
-        let spent_packet_ciphertext = xor_bytes(
-            spent_packet_plaintext.as_slice(),
-            spent_packet_key.as_slice(),
+        // 24 bytes total
+        packet_plaintext.extend_from_slice(recipient_bytes);
+
+        // let packet_key = hkdf_sha_512(
+        //     &Some(vec![0u8; 64]),
+        //     packet_ikm,
+        //     "".as_bytes(),
+        //     packet_size,
+        // )?;
+        
+        // use top 64 bits of notification ID for packet ID
+        let packet_id = &id.0.as_slice()[0..8];
+
+        // take the bottom bits from the notification ID for key material
+        let packet_ikm = &id.0.as_slice()[8..32];
+
+        // create ciphertext by XOR'ing the plaintext with the notification ID
+        let packet_ciphertext = xor_bytes(
+            &packet_plaintext[..],
+            &packet_ikm[0..MULTI_SPENT_CHANNEL_PACKET_SIZE]
         );
-        let spent_packet_bytes: Vec<u8> =
-            [spent_packet_id.to_vec(), spent_packet_ciphertext].concat();
 
-        spent_packets.push((notification.notification_for.clone(), spent_packet_bytes));
+        // construct the packet bytes
+        let packet_bytes: Vec<u8> = [
+            packet_id.to_vec(),
+            packet_ciphertext,
+        ].concat();
+
+        // add to packets data
+        spent_packets.push((notification.notification_for.clone(), packet_bytes));
     }
 
     // filter out any notifications for senders showing up more than once
@@ -378,14 +419,13 @@ pub fn multi_spent_data(
         .filter(|(addr, _)| *spent_counts.get(addr).unwrap_or(&0u16) <= 1)
         .map(|(_, packet)| packet)
         .collect();
-    if spent_packets.len() > MULTI_SPENT_CHANNEL_BLOOM_N as usize {
+    if spent_packets.len() > MULTI_SPENT_CHANNEL_BLOOM_N {
         // still too many packets
-        spent_packets = spent_packets[0..MULTI_SPENT_CHANNEL_BLOOM_N as usize].to_vec();
+        spent_packets = spent_packets[0..MULTI_SPENT_CHANNEL_BLOOM_N].to_vec();
     }
 
     // now add extra packets, if needed, to hide number of packets
-    let padding_size =
-        MULTI_SPENT_CHANNEL_BLOOM_N.saturating_sub(spent_packets.len() as u32) as usize;
+    let padding_size = MULTI_SPENT_CHANNEL_BLOOM_N.saturating_sub(spent_packets.len());
     if padding_size > 0 {
         let padding_addresses = hkdf_sha_512(
             &Some(vec![0u8; 64]),
@@ -401,11 +441,11 @@ pub fn multi_spent_data(
             // contribute padding packet to bloom filter
             let seed = get_seed(&CanonicalAddr::from(padding_address), secret)?;
             let id = notification_id(&seed, &MULTI_SPENT_CHANNEL_ID.to_string(), &tx_hash)?;
-            let mut hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
-            for _ in 0..MULTI_SPENT_CHANNEL_BLOOM_K {
-                let bit_index = (hash_bytes & U256::from(0x01ff)).as_usize();
-                spent_bloom_filter = spent_bloom_filter | (U512::from(1) << bit_index);
-                hash_bytes = hash_bytes >> 9;
+            let hash_bytes = U256::from_big_endian(&sha_256(id.0.as_slice()));
+            let bloom_mask: U256 = U256::from(0x1ff);
+            for i in 0..MULTI_RECEIVED_CHANNEL_BLOOM_K {
+                let bit_index = ((hash_bytes >> (256 - 9 - (i * 9))) & bloom_mask).as_usize();
+                spent_bloom_filter |= (U512::from(1) << bit_index);
             }
 
             // padding packet plaintext
@@ -430,9 +470,8 @@ pub fn multi_spent_data(
     }
 
     let mut spent_bloom_filter_bytes: Vec<u8> = vec![];
-    for biguint in spent_bloom_filter.0 {
-        spent_bloom_filter_bytes.extend_from_slice(&biguint.to_be_bytes());
-    }
+    spent_bloom_filter_bytes.extend_from_slice(&spent_bloom_filter.to_big_endian());
+
     for packet in spent_packets {
         spent_bloom_filter_bytes.extend(packet.iter());
     }

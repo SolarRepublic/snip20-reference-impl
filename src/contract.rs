@@ -33,7 +33,7 @@ use crate::msg::{
     InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
 };
 use crate::notifications::{
-    multi_received_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, 
+    multi_recvd_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, 
     MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_N, MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, 
     MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE
 };
@@ -992,7 +992,7 @@ fn query_channel_info(
                     data: Some(Descriptor {
                         r#type: format!("packet[{}]", MULTI_RECEIVED_CHANNEL_BLOOM_N),
                         version: "1".to_string(),
-                        packet_size: MULTI_RECEIVED_CHANNEL_PACKET_SIZE,
+                        packet_size: MULTI_RECEIVED_CHANNEL_PACKET_SIZE as u32,
                         data: StructDescriptor {
                             r#type: "struct".to_string(),
                             label: "transfer".to_string(),
@@ -1034,7 +1034,7 @@ fn query_channel_info(
                     data: Some(Descriptor {
                         r#type: format!("packet[{}]", MULTI_SPENT_CHANNEL_BLOOM_N),
                         version: "1".to_string(),
-                        packet_size: MULTI_SPENT_CHANNEL_PACKET_SIZE,
+                        packet_size: MULTI_SPENT_CHANNEL_PACKET_SIZE as u32,
                         data: StructDescriptor {
                             r#type: "struct".to_string(),
                             label: "transfer".to_string(),
@@ -1353,7 +1353,7 @@ fn try_batch_mint(
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
         .hash.to_ascii_uppercase();
-    let received_data = multi_received_data(
+    let received_data = multi_recvd_data(
         deps.api,
         notifications,
         &tx_hash,
@@ -1691,7 +1691,6 @@ fn try_transfer_impl(
         denom,
         memo,
         block,
-        false,
         #[cfg(feature = "gas_tracking")]
         tracker,
         false,
@@ -1794,30 +1793,30 @@ fn try_transfer(
             spent_notification.data_plaintext(),
         );
 
-        let tx_hash = env.transaction.unwrap().hash.to_ascii_uppercase();
-        let block_height = env.block.height;
+        // let tx_hash = env.transaction.unwrap().hash.to_ascii_uppercase();
+        // let block_height = env.block.height;
 
-        let channel_id_bytes = sha_256("recvd".as_bytes())[..12].to_vec();
-        let salt_bytes = hex::decode(&tx_hash).unwrap()[..12].to_vec();
-        let nonce: Vec<u8> = channel_id_bytes
-            .iter()
-            .zip(salt_bytes.iter())
-            .map(|(&b1, &b2)| b1 ^ b2)
-            .collect();
-        let aad = format!("{}:{}", block_height, tx_hash);
+        // let channel_id_bytes = sha_256("recvd".as_bytes())[..12].to_vec();
+        // let salt_bytes = hex::decode(&tx_hash).unwrap()[..12].to_vec();
+        // let nonce: Vec<u8> = channel_id_bytes
+        //     .iter()
+        //     .zip(salt_bytes.iter())
+        //     .map(|(&b1, &b2)| b1 ^ b2)
+        //     .collect();
+        // let aad = format!("{}:{}", block_height, tx_hash);
 
-        resp = resp.add_attribute_plaintext(
-            "wasm.debug", 
-            format!("txhash: {};\nsecret:{:#?};\nsender:{};\nblock:{};\nnonce:\n{:?};\naad:{}\nchannel:{:?};\nsalt:{:?}",
-                tx_hash,
-                secret,
-                info.sender,
-                block_height,
-                nonce,
-                aad,
-                channel_id_bytes,
-                salt_bytes,
-            ))
+        // resp = resp.add_attribute_plaintext(
+        //     "wasm.debug", 
+        //     format!("txhash: {};\nsecret:{:#?};\nsender:{};\nblock:{};\nnonce:\n{:?};\naad:{}\nchannel:{:?};\nsalt:{:?}",
+        //         tx_hash,
+        //         secret,
+        //         info.sender,
+        //         block_height,
+        //         nonce,
+        //         aad,
+        //         channel_id_bytes,
+        //         salt_bytes,
+        //     ))
     }
 
     #[cfg(feature = "gas_tracking")]
@@ -1881,11 +1880,13 @@ fn try_batch_transfer(
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
         .hash.to_ascii_uppercase();
+
     let (received_notifications, spent_notifications): (
         Vec<Notification<ReceivedNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
-    let received_data = multi_received_data(
+
+    let received_data = multi_recvd_data(
         deps.api,
         received_notifications,
         &tx_hash,
@@ -2145,7 +2146,7 @@ fn try_batch_send(
         Vec<Notification<ReceivedNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
-    let received_data = multi_received_data(
+    let received_data = multi_recvd_data(
         deps.api,
         received_notifications,
         &tx_hash,
@@ -2267,7 +2268,6 @@ fn try_transfer_from_impl(
         denom,
         memo,
         &env.block,
-        true,
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         true,
@@ -2401,7 +2401,7 @@ fn try_batch_transfer_from(
         Vec<Notification<ReceivedNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
-    let received_data = multi_received_data(
+    let received_data = multi_recvd_data(
         deps.api,
         received_notifications,
         &tx_hash,
@@ -2581,7 +2581,7 @@ fn try_batch_send_from(
         Vec<Notification<ReceivedNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
-    let received_data = multi_received_data(
+    let received_data = multi_recvd_data(
         deps.api,
         received_notifications,
         &tx_hash,
@@ -3133,7 +3133,6 @@ fn perform_transfer(
     denom: String,
     memo: Option<String>,
     block: &BlockInfo,
-    is_from_action: bool,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
     is_from_action: bool,
 ) -> StdResult<u128> {
