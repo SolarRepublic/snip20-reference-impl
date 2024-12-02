@@ -2,9 +2,8 @@ import type {ExternallyOwnedAccount} from './eoa';
 
 import {encodeCosmosBankMsgSend, SI_MESSAGE_TYPE_COSMOS_BANK_MSG_SEND} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/tx';
 import {encodeGoogleProtobufAny, type EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
-import {broadcast_result, create_and_sign_tx_direct, exec_fees} from '@solar-republic/neutrino';
+import {broadcast_result, create_and_sign_tx_direct} from '@solar-republic/neutrino';
 
-import {X_GAS_PRICE} from './constants';
 import {K_TEF_LOCAL} from './contract';
 
 
@@ -53,14 +52,11 @@ export async function bank_send(k_sender: ExternallyOwnedAccount, xg_amount: big
 		bank(k_recipient, xg_amount);
 	}
 
-	// compute gas fees
-	const a_fees = exec_fees(sg_limit, X_GAS_PRICE);
-
 	// create and sign tx
-	const [atu8_raw,, si_txn] = await create_and_sign_tx_direct(k_sender.wallet, a_msgs, a_fees, sg_limit);
+	const [atu8_raw,, si_txn] = await create_and_sign_tx_direct(k_sender.wallet, a_msgs, sg_limit);
 
 	// pay for gas
-	bank(k_sender, -BigInt(a_fees[0][0]+''));
+	bank(k_sender, -BigInt(k_sender.wallet.fees!(sg_limit)[0][0]));
 
 	// broadcast to chain
 	const [xc_code, sx_res, g_meta, atu8_data, h_events] = await broadcast_result(k_sender.wallet, atu8_raw, si_txn, K_TEF_LOCAL);

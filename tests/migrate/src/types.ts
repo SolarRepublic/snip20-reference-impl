@@ -1,7 +1,7 @@
+import type {O, U} from 'ts-toolbelt';
+
 import type {JsonObject} from '@blake.regalia/belt';
-import type {WeakSecretAccAddr} from '@solar-republic/neutrino';
-import type { WeakUintStr } from '@solar-republic/types';
-import type { O, U } from 'ts-toolbelt';
+import type {WeakUintStr, WeakSecretAccAddr} from '@solar-republic/types';
 
 type ArgTypeMap = {
 	string: string;
@@ -103,7 +103,7 @@ export type Snip250TxEvent = {
 		redeem: {};
 	} | {
 		migration: {};
-	}
+	};
 
 	coins: {
 		denom: string;

@@ -1,12 +1,12 @@
 import type {Parser, Statement} from './parser';
 import type {ParseSignatureString} from './types';
 import type {EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
-import type {WeakSecretAccAddr, SecretContract, TxResultTuple, CwSecretAccAddr} from '@solar-republic/neutrino';
+import type {SecretContract, TxResultTuple} from '@solar-republic/neutrino';
+import type {WeakSecretAccAddr, CwSecretAccAddr} from '@solar-republic/types';
 
-import {__UNDEFINED, F_IDENTITY, is_number, is_undefined, keys, parse_json_safe, snake, stringify_json, text_to_base64, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
-import {broadcast_result, create_and_sign_tx_direct, exec_fees, secret_contract_responses_decrypt} from '@solar-republic/neutrino';
+import {__UNDEFINED, F_IDENTITY, is_number, is_undefined, keys, snake, text_to_base64, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
+import {broadcast_result, create_and_sign_tx_direct, secret_contract_responses_decrypt} from '@solar-republic/neutrino';
 
-import {X_GAS_PRICE} from './constants';
 import {K_TEF_LOCAL} from './contract';
 import {bank} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
@@ -95,18 +95,15 @@ export class Evaluator {
 		await Promise.all([..._hm_pending.entries()].map(async([k_eoa, [a_execs, f_handler]]) => {
 			const xg_limit = 100_000n + (80_000n * BigInt(a_execs.length));
 
-			const a_fees = exec_fees(xg_limit, X_GAS_PRICE);
-
 			// sign transaction
 			const [atu8_raw, atu8_signdoc, si_txn] = await create_and_sign_tx_direct(
 				k_eoa.wallet,
 				a_execs.map(([atu8]) => atu8),
-				a_fees,
 				xg_limit
 			);
 
 			// update bank from gas spent
-			bank(k_eoa, -BigInt(a_fees[0][0]+''));
+			bank(k_eoa, -BigInt(k_eoa.wallet.fees!(xg_limit)[0][0]));
 
 			// broadcast
 			const a_result = await broadcast_result(

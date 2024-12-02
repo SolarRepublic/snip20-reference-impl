@@ -12,14 +12,14 @@ importers:
         specifier: ^0.9.7
         version: 0.9.7
       '@solar-republic/cosmos-grpc':
-        specifier: ^0.17.2
-        version: 0.17.2
+        specifier: ^0.18.0-beta.6
+        version: 0.18.0-beta.6
       '@solar-republic/crypto':
         specifier: ^0.2.14
         version: 0.2.14
       '@solar-republic/neutrino':
-        specifier: 1.7.0-beta.14
-        version: 1.7.0-beta.14
+        specifier: 1.7.0-beta.23
+        version: 1.7.0-beta.23
       '@solar-republic/wasm-secp256k1':
         specifier: ^0.4.2
         version: 0.4.2
@@ -40,14 +40,14 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0(typescript@5.6.3)
       '@solar-republic/types':
-        specifier: ^0.2.13
-        version: 0.2.13
+        specifier: ^0.3.4
+        version: 0.3.4
       '@types/chai':
         specifier: ^5.0.1
         version: 5.0.1
       '@types/node':
-        specifier: ^22.9.3
-        version: 22.9.3
+        specifier: ^22.10.1
+        version: 22.10.1
       chai:
         specifier: ^5.1.1
         version: 5.1.2
@@ -188,18 +188,18 @@ packages:
     resolution: {integrity: sha512-hMqGh97K1vrsYbdqRhXgHnwYH3UVYoQJywWfS9Sahnxh74K+pRpku3L/kV/Wk/wxJGaD0Rxoe22Afqf5YfupmQ==}
     hasBin: true
 
-  '@solar-republic/cosmos-grpc@0.17.2':
-    resolution: {integrity: sha512-6kBuNAm3dcDrUaCV++L2F0/7MEdLlpz+D1QEgRQNLazcE70LuI/m+pnL+cLGtPHQkaGkWOpANphMNPtqfwvN3w==}
+  '@solar-republic/cosmos-grpc@0.18.0-beta.6':
+    resolution: {integrity: sha512-KXSy7ZWyF+ML4QzNOUhTIX8RJnFYG+A6duWoeFw6ZM2/ifB7lFttaNFXberhcISSE7igt8TFrkeavMM+6YLEyQ==}
     hasBin: true
 
   '@solar-republic/crypto@0.2.14':
     resolution: {integrity: sha512-lm9U5QuBamqYAsdrJsnVfE7Uef4TyCvgLsgypPI1/RNjFdRCeKpMXoCRmJxeu3m/FzOhmPvX3WDd+ePCGw149w==}
 
-  '@solar-republic/neutrino@1.7.0-beta.14':
-    resolution: {integrity: sha512-7YnfV+7y8XGopPzPdpKEERJzSbfZ3s0CRCbQ2/A20GMURzX63YibM86N0WIeSIamKt09d4ziVZxixZ50BcgQlg==}
+  '@solar-republic/neutrino@1.7.0-beta.23':
+    resolution: {integrity: sha512-i5uUZhXWF3eQENrbD7hxq2vkat+vbRjb81D3o486kRWgtERLKpw8Oxr1ZGP9qTwKfGDLoaPjseiePz/aVhP01Q==}
 
-  '@solar-republic/types@0.2.13':
-    resolution: {integrity: sha512-cJfNG3HY1gPkyU65KMOcNuy0oMaTKicgWLegJ4s+CJuf0v1Q3I4b281y9HBDtYIBgrb5c5HrWgg30fZ7gKIxEw==}
+  '@solar-republic/types@0.3.4':
+    resolution: {integrity: sha512-UBTH+ZAyPcoC5axyCEFuhjiXn9gLMRgCNGFfayzU1IAIeWeIyzW+MN7u0LVHgA5OZxRFL2v/75AZC0vozV3lvw==}
 
   '@solar-republic/wasm-secp256k1@0.2.9':
     resolution: {integrity: sha512-fjDX7u9jNfpKcXvlVikHDrmw0rlgwq4aToqXM+XltVCbZcL+8RKj1530IaIcbU7WtNj8ve6zC2VcTzBw2J5Jag==}
@@ -226,8 +226,8 @@ packages:
   '@types/json-schema@7.0.15':
     resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
 
-  '@types/node@22.9.3':
-    resolution: {integrity: sha512-F3u1fs/fce3FFk+DAxbxc78DF8x0cY09RRL8GnXLmkJ1jvx3TtPdWoTT5/NiYfI5ASqXBmfqJi9dZ3gxMx4lzw==}
+  '@types/node@22.10.1':
+    resolution: {integrity: sha512-qKgsUwfHZV2WCWLAnVP1JqnpE6Im6h3Y0+fYgMTasNQ7V++CBX5OT1as0g0f+OyubbFqhf6XVNIsmN4IIhEgGQ==}
 
   '@types/semver@7.5.8':
     resolution: {integrity: sha512-I8EUhyrgfLrcTkzV3TSsGyl1tSuPrEDzr0yd5m90UgNxQkyDXULk3b6MlQqTCpZpNtWe1K0hzclnZkTcLBe2UQ==}
@@ -923,8 +923,8 @@ packages:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
     engines: {node: '>= 0.8.0'}
 
-  protobufjs@7.2.6:
-    resolution: {integrity: sha512-dgJaEDDL6x8ASUZ1YqWciTRrdOuYNzoOf27oHNfdyvKqHr5i0FV7FSLU+aIeFjyFgVxrpTOtQUi0BLLBymZaBw==}
+  protobufjs@7.4.0:
+    resolution: {integrity: sha512-mRUWCc3KUU4w1jU8sGxICXH/gNS94DvI1gxqDvBzhj1JpcsimQkYiOJfwsPUykUI5ZaspFbSgmBLER8IrQ3tqw==}
     engines: {node: '>=12.0.0'}
 
   punycode@2.3.1:
@@ -1077,8 +1077,8 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  undici-types@6.19.8:
-    resolution: {integrity: sha512-ve2KP6f/JnbPBFyobGHuerC9g1FYGn/F8n1LWTwNxCEzd6IfqTwUQcNXgEtmmQ6DlRrC1hrSrBnCZPokRrDHjw==}
+  undici-types@6.20.0:
+    resolution: {integrity: sha512-Ny6QZ2Nju20vw1SRHe3d9jVu6gJ+4e3+MMpqu7pqE5HT6WsTSlce++GQmK5UXS8mzV8DSYHrQH+Xrf2jVcuKNg==}
 
   universalify@2.0.1:
     resolution: {integrity: sha512-gptHNQghINnc/vTGIk0SOFGFNXw7JVrlRUtConJRlvaw6DuX0wO5Jeko9sWrMBhh+PsYAZ7oXAiOnf/UKogyiw==}
@@ -1261,11 +1261,11 @@ snapshots:
       ts-toolbelt: 9.6.0
       yargs: 17.7.2
 
-  '@solar-republic/cosmos-grpc@0.17.2':
+  '@solar-republic/cosmos-grpc@0.18.0-beta.6':
     dependencies:
       '@solar-republic/crypto': 0.2.14
       google-protobuf: 3.21.4
-      protobufjs: 7.2.6
+      protobufjs: 7.4.0
 
   '@solar-republic/crypto@0.2.14':
     dependencies:
@@ -1273,14 +1273,14 @@ snapshots:
       '@solar-republic/wasm-secp256k1': 0.2.9
       hash-wasm: 4.11.0
 
-  '@solar-republic/neutrino@1.7.0-beta.14':
+  '@solar-republic/neutrino@1.7.0-beta.23':
     dependencies:
       '@blake.regalia/belt': 0.45.3
-      '@solar-republic/cosmos-grpc': 0.17.2
+      '@solar-republic/cosmos-grpc': 0.18.0-beta.6
       '@solar-republic/crypto': 0.2.14
       '@solar-republic/wasm-secp256k1': 0.4.2
 
-  '@solar-republic/types@0.2.13': {}
+  '@solar-republic/types@0.3.4': {}
 
   '@solar-republic/wasm-secp256k1@0.2.9':
     dependencies:
@@ -1309,9 +1309,9 @@ snapshots:
 
   '@types/json-schema@7.0.15': {}
 
-  '@types/node@22.9.3':
+  '@types/node@22.10.1':
     dependencies:
-      undici-types: 6.19.8
+      undici-types: 6.20.0
 
   '@types/semver@7.5.8': {}
 
@@ -2032,7 +2032,7 @@ snapshots:
 
   prelude-ls@1.2.1: {}
 
-  protobufjs@7.2.6:
+  protobufjs@7.4.0:
     dependencies:
       '@protobufjs/aspromise': 1.1.2
       '@protobufjs/base64': 1.1.2
@@ -2044,7 +2044,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.0
-      '@types/node': 22.9.3
+      '@types/node': 22.10.1
       long: 5.2.3
 
   punycode@2.3.1: {}
@@ -2185,7 +2185,7 @@ snapshots:
 
   typescript@5.6.3: {}
 
-  undici-types@6.19.8: {}
+  undici-types@6.20.0: {}
 
   universalify@2.0.1: {}
 

@@ -1,6 +1,8 @@
 import type {Snip20TransferEvent, Snip250TxEvent} from './types';
-import type {Snip20, SecretAccAddr, Snip20Queries, Snip24Executions, Snip26, Snip26Queries} from '@solar-republic/contractor';
+import type {Snip20, SecretAccAddr} from '@solar-republic/contractor';
 
+
+import type {CwUint128, WeakSecretAccAddr} from '@solar-republic/types';
 
 import {readFileSync} from 'node:fs';
 
@@ -9,10 +11,10 @@ import {__UNDEFINED, bigint_greater, bigint_lesser, canonicalize_json, is_number
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
-import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, subscribe_snip52_channels, type WeakSecretAccAddr} from '@solar-republic/neutrino';
+import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, exec_secret_contract, exec_fees} from '@solar-republic/neutrino';
 
-import {k_wallet_a, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
-import {K_TEF_LOCAL, migrate_contract, preload_original_contract, upload_code, type MigratedContractInterface} from './contract';
+import {k_wallet_a, k_wallet_b, k_wallet_c, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
+import {migrate_contract, preload_original_contract, upload_code, type MigratedContractInterface} from './contract';
 import {bank, balance, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
 import {Evaluator, handler} from './evaluator';
@@ -486,7 +488,7 @@ async function validate_state(b_premigrate=false) {
 		} = k_eoa;
 
 		// resolve
-		const [[,, g_bank], a4_balance, a4_history] = await Promise.all([
+		const [[g_bank], a4_balance, a4_history] = await Promise.all([
 			// query bank module
 			b_premigrate? queryCosmosBankBalance(P_SECRET_LCD, sa_owner, 'uscrt'): [],
 
@@ -673,7 +675,7 @@ async function validate_state(b_premigrate=false) {
 
 	// prepare migration message
 	console.debug('Encoding migration message...');
-	const [,, g_reg] = await querySecretRegistrationTxKey(P_SECRET_LCD);
+	const [g_reg] = await querySecretRegistrationTxKey(P_SECRET_LCD);
 	const [atu8_cons_pk] = destructSecretRegistrationKey(g_reg!);
 	const k_wasm = SecretWasm(atu8_cons_pk!);
 
@@ -682,7 +684,7 @@ async function validate_state(b_premigrate=false) {
 
 	// determine how much uscrt each genesis account actually has
 	for(const k_eoa of a_eoas) {
-		const [,, g_bank] = await queryCosmosBankBalance(P_SECRET_LCD, k_eoa.address, 'uscrt');
+		const [g_bank] = await queryCosmosBankBalance(P_SECRET_LCD, k_eoa.address, 'uscrt');
 		bank(k_eoa, BigInt(g_bank?.balance?.amount ?? '0'));
 	}
 
@@ -750,14 +752,60 @@ async function validate_state(b_premigrate=false) {
 		---
 
 		${program(false)}
+
+		---
+
 	`, k_snip_migrated);
 
 	// validate
 	await validate_state(false);
 
+	// batch_* tests
+	const xg_limit = 800_000n;
+	// [
+	// 	{
+	// 		method: 'batch_transfer',
+	// 		groups: [
+	// 			{
+	// 				from: 'Alice',
+	// 				txs: [
+	// 					{
+	// 						actions: [
+	// 							{
+	// 								amount: '1',
+	// 							}
+	// 						]
+	// 					}
+	// 				],
+	// 			}
+	// 		],
+	// 	}
+	// ]
+	const a4_exec = await exec_secret_contract(k_snip_migrated, k_wallet_a, {
+		batch_transfer: {
+			actions: [
+				{
+					amount: '1' as CwUint128,
+					recipient: k_wallet_b.addr,
+				},
+				{
+					amount: '1' as CwUint128,
+					recipient: k_wallet_c.addr,
+				},
+			],
+		},
+	}, xg_limit);
+
+	debugger;
+
 	// check that notifications were verified
 	for(const k_eoa of a_eoas) {
 		k_eoa.check_notifs();
+	}
+
+	// unsubscribe from everything
+	for(const k_eoa of a_eoas) {
+		k_eoa.unsubscribe();
 	}
 
 	// done

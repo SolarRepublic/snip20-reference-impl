@@ -1,24 +1,24 @@
 import type {JsonObject, JsonValue} from '@blake.regalia/belt';
 import type {SecretContractInterface, Snip24, FungibleTransferCall, Snip20, Snip20Queries, Snip24Executions, Snip26, Snip26Queries} from '@solar-republic/contractor';
 import type {EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
-import type {TxResultTuple, Wallet, WeakSecretAccAddr} from '@solar-republic/neutrino';
-import type {CwHexLower, CwUint64, WeakUint128Str, WeakUintStr} from '@solar-republic/types';
+import type {TxResultTuple, Wallet} from '@solar-republic/neutrino';
+import type {CwHexLower, CwUint64, WeakUint128Str, WeakUintStr, WeakSecretAccAddr} from '@solar-republic/types';
 
 import {promisify} from 'node:util';
 import {gunzip} from 'node:zlib';
 
-import {__UNDEFINED, base64_to_bytes, bytes, bytes_to_base64, bytes_to_hex, bytes_to_text, cast, sha256, text_to_base64} from '@blake.regalia/belt';
+import {__UNDEFINED, base64_to_bytes, bytes_to_base64, bytes_to_hex, bytes_to_text, cast, sha256} from '@blake.regalia/belt';
 import {encodeGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
 import {SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_STORE_CODE, SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_INSTANTIATE_CONTRACT, encodeSecretComputeMsgStoreCode, encodeSecretComputeMsgInstantiateContract, encodeSecretComputeMsgMigrateContract, SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_MIGRATE_CONTRACT} from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/msg';
 import {querySecretComputeCode, querySecretComputeCodeHashByCodeId, querySecretComputeCodes, querySecretComputeContractInfo} from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
-import {bech32_decode, random_bytes} from '@solar-republic/crypto';
-import {SecretContract, SecretWasm, TendermintEventFilter, broadcast_result, create_and_sign_tx_direct, exec_fees, random_32} from '@solar-republic/neutrino';
+import {random_bytes} from '@solar-republic/crypto';
+import {SecretContract, SecretWasm, TendermintEventFilter, broadcast_result, create_and_sign_tx_direct, random_32} from '@solar-republic/neutrino';
 
-import {X_GAS_PRICE, P_SECRET_LCD, P_SECRET_RPC, k_wallet_a, P_MAINNET_LCD, k_wallet_admin} from './constants';
+import {P_SECRET_LCD, P_SECRET_RPC, k_wallet_a, P_MAINNET_LCD} from './constants';
 
-export type MigratedContractInterface = {
+export type MigratedContractInterface = SecretContractInterface<{
 	config: Snip26['config'] & {
 		snip52_channels: {
 			recvd: {
@@ -42,13 +42,59 @@ export type MigratedContractInterface = {
 					expiration: number,
 				];
 			};
+			multirecvd: {
+				schema: {
+					type: 'packet[16]';
+					version: 1;
+					packetSize: 16;
+					data: {
+						label: 'packet';
+						type: 'struct';
+						members: [
+							{
+								label: 'amount';
+								type: 'uint64';
+							},
+							{
+								label: 'recipientId';
+								type: 'uint64';
+							},
+						];
+					};
+				};
+			};
+			multispent: {
+				schema: {
+					type: 'packet[16]';
+					version: 1;
+					packetSize: 24;
+					data: {
+						label: 'packet';
+						type: 'struct';
+						members: [
+							{
+								label: 'amount';
+								type: 'uint64';
+							},
+							{
+								label: 'balance';
+								type: 'uint64';
+							},
+							{
+								label: 'recipientId';
+								type: 'uint64';
+							},
+						];
+					};
+				};
+			};
 		};
 	};
 	executions: Snip24Executions & {};
 	queries: Snip26Queries & {
 		legacy_transfer_history: Snip20Queries['transfer_history'];
 	};
-};
+}>;
 
 export const K_TEF_LOCAL = await TendermintEventFilter(P_SECRET_RPC);
 
@@ -63,7 +109,6 @@ export async function exec(k_wallet: Wallet, atu8_msg: EncodedGoogleProtobufAny,
 	const [atu8_raw, atu8_signdoc, si_txn] = await create_and_sign_tx_direct(
 		k_wallet,
 		[atu8_msg],
-		exec_fees(xg_gas_limit, X_GAS_PRICE, 'uscrt'),
 		xg_gas_limit
 	);
 
@@ -90,7 +135,7 @@ export async function upload_code(k_wallet: Wallet, atu8_wasm: Uint8Array): Prom
 	const sb16_hash = cast<CwHexLower>(bytes_to_hex(atu8_hash));
 
 	// fetch all uploaded codes
-	const [,, g_codes] = await querySecretComputeCodes(P_SECRET_LCD);
+	const [g_codes] = await querySecretComputeCodes(P_SECRET_LCD);
 
 	// already uploaded
 	const g_existing = g_codes?.code_infos?.find(g => g.code_hash! === sb16_hash);
@@ -123,10 +168,6 @@ export async function upload_code(k_wallet: Wallet, atu8_wasm: Uint8Array): Prom
 	];
 }
 
-export async function wasm() {
-
-}
-
 
 /**
  * Instantiates the given code into a contract
@@ -136,10 +177,10 @@ export async function wasm() {
  * @returns 
  */
 export async function instantiate_contract(k_wallet: Wallet, sg_code_id: WeakUintStr, h_init_msg: JsonObject): Promise<WeakSecretAccAddr> {
-	const [,, g_reg] = await querySecretRegistrationTxKey(P_SECRET_LCD);
+	const [g_reg] = await querySecretRegistrationTxKey(P_SECRET_LCD);
 	const [atu8_cons_pk] = destructSecretRegistrationKey(g_reg!);
 	const k_wasm = SecretWasm(atu8_cons_pk!);
-	const [,, g_hash] = await querySecretComputeCodeHashByCodeId(P_SECRET_LCD, sg_code_id);
+	const [g_hash] = await querySecretComputeCodeHashByCodeId(P_SECRET_LCD, sg_code_id);
 
 	// @ts-expect-error imported types versioning
 	const atu8_body = await k_wasm.encodeMsg(g_hash!.code_hash, h_init_msg);
@@ -188,7 +229,7 @@ export async function instantiate_contract(k_wallet: Wallet, sg_code_id: WeakUin
  */
 export async function replicate_code_from_mainnet(sa_contract: WeakSecretAccAddr): Promise<[WeakUintStr, CwHexLower]> {
 	// fetch all uploaded codes
-	const [,, g_codes] = await querySecretComputeCodes(P_SECRET_LCD);
+	const [g_codes] = await querySecretComputeCodes(P_SECRET_LCD);
 
 	// check for existing code
 	const g_code_existing = g_codes?.code_infos?.find(g => ('1' as CwUint64) === g.code_id!);
@@ -200,13 +241,13 @@ export async function replicate_code_from_mainnet(sa_contract: WeakSecretAccAddr
 	console.debug(`Asking <${P_MAINNET_LCD}> for contract info on ${sa_contract}...`);
 
 	// query mainnet for original contract's code ID
-	const [,, g_info] = await querySecretComputeContractInfo(P_MAINNET_LCD, sa_contract);
+	const [g_info] = await querySecretComputeContractInfo(P_MAINNET_LCD, sa_contract);
 	const sg_code_id = g_info?.contract_info?.code_id;
 
 	console.debug(`Downloading WASM bytecode...`);
 
 	// fetch the code's WASM
-	const [,, g_code] = await querySecretComputeCode(P_MAINNET_LCD, sg_code_id);
+	const [g_code] = await querySecretComputeCode(P_MAINNET_LCD, sg_code_id);
 
 	// parse base64
 	const atu8_wasm = base64_to_bytes(g_code!.wasm!);

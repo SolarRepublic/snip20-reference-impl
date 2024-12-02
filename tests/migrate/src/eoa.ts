@@ -1,8 +1,8 @@
 import type {Snip20TransferEvent, Snip250Action, Snip250TxEvent} from './types';
 import type {Dict, Nilable} from '@blake.regalia/belt';
 
-import type {CwSecretAccAddr, EventUnlistener, Wallet, WeakSecretAccAddr, SecretContract} from '@solar-republic/neutrino';
-import type {SecretQueryPermit} from '@solar-republic/types';
+import type {EventUnlistener, Wallet, SecretContract} from '@solar-republic/neutrino';
+import type {Snip24QueryPermitSigned, WeakSecretAccAddr, CwSecretAccAddr} from '@solar-republic/types';
 
 import {crypto_random_bytes, keys, remove, sha256, text_to_bytes} from '@blake.regalia/belt';
 import {bech32_encode, pubkey_to_bech32} from '@solar-republic/crypto';
@@ -91,7 +91,7 @@ export class ExternallyOwnedAccount {
 	balance = 0n;
 
 	viewingKey = '';
-	queryPermit: Nilable<SecretQueryPermit> = null;
+	queryPermit: Nilable<Snip24QueryPermitSigned> = null;
 
 	allowancesGiven: Record<WeakSecretAccAddr, Allowance> = {};
 	allowancesReceived: Record<WeakSecretAccAddr, Allowance> = {};
@@ -279,6 +279,14 @@ export class ExternallyOwnedAccount {
 
 				console.log(`🔔 ${this.label} received an allowance for ${xg_amount} TKN from ${k_allower.label} ${s_expires}`);
 			},
-		});
+
+			multirecvd: (g_data, atu8_data) => {
+				debugger;
+			},
+		}, this);
+	}
+
+	unsubscribe(): void {
+		this._f_unsubscribe?.();
 	}
 }
