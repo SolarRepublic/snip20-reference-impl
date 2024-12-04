@@ -25,6 +25,7 @@ export type MigratedContractInterface = SecretContractInterface<{
 				cbor: [
 					amount: bigint,
 					sender: Uint8Array,
+					memo_len: number,
 				];
 			};
 			spent: {
@@ -46,18 +47,22 @@ export type MigratedContractInterface = SecretContractInterface<{
 				schema: {
 					type: 'packet[16]';
 					version: 1;
-					packetSize: 16;
+					packetSize: 17;
 					data: {
 						label: 'packet';
 						type: 'struct';
 						members: [
+							{
+								label: 'flags';
+								type: 'uint8';
+							},
 							{
 								label: 'amount';
 								type: 'uint64';
 							},
 							{
 								label: 'recipientId';
-								type: 'uint64';
+								type: 'bytes8';
 							},
 						];
 					};

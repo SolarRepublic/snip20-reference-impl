@@ -4,8 +4,8 @@ import type {Dict, Nilable} from '@blake.regalia/belt';
 import type {EventUnlistener, Wallet, SecretContract} from '@solar-republic/neutrino';
 import type {Snip24QueryPermitSigned, WeakSecretAccAddr, CwSecretAccAddr} from '@solar-republic/types';
 
-import {crypto_random_bytes, keys, remove, sha256, text_to_bytes} from '@blake.regalia/belt';
-import {bech32_encode, pubkey_to_bech32} from '@solar-republic/crypto';
+import {bytes_to_hex, crypto_random_bytes, entries, keys, remove, sha256, text_to_bytes} from '@blake.regalia/belt';
+import {bech32_decode, bech32_encode, pubkey_to_bech32} from '@solar-republic/crypto';
 import {subscribe_snip52_channels} from '@solar-republic/neutrino';
 import {initWasmSecp256k1} from '@solar-republic/wasm-secp256k1';
 
@@ -280,7 +280,52 @@ export class ExternallyOwnedAccount {
 				console.log(`🔔 ${this.label} received an allowance for ${xg_amount} TKN from ${k_allower.label} ${s_expires}`);
 			},
 
-			multirecvd: (g_data, atu8_data) => {
+			multirecvd: (a_packet, atu8_data, g_tx, h_events) => {
+				const k_sender = ExternallyOwnedAccount.at(h_events['message.sender'][0]);
+
+				if(a_packet) {
+					const [xg_flags, xg_amount, atu8_term] = a_packet;
+
+					const s0x_sender = bytes_to_hex(atu8_term);
+
+					let s_from = '';
+
+					// sender is owner
+					if(xg_flags & 0x80n) {
+						s_from = k_sender.label;
+					}
+					else {
+						const a_matches: ExternallyOwnedAccount[] = [];
+
+						for(const [sa_addr, k_eoa] of entries(h_cached_addresses)) {
+							if(s0x_sender === bytes_to_hex(bech32_decode(sa_addr).subarray(-8))) {
+								a_matches.push(k_eoa);
+							}
+						}
+
+						s_from = `...${s0x_sender}:[${a_matches.map(k => k.label).join(', ')}]`;
+					}
+
+					console.log(`🔔 ${this.label} received multi-recipient transfer for ${xg_amount} TKN from ${s_from} ${xg_flags & 0x40n? `WITH memo`: 'no memo'} executed by ${k_sender.label}`);
+				}
+				else {
+					console.log(`🔔 ${this.label} received multi-recipient transfer for (?) TKN executed by ${k_sender.label}`);
+				}
+
+				debugger;
+			},
+
+			multispent: (a_spent, atu8_data, g_tx, h_events) => {
+				const k_sender = ExternallyOwnedAccount.at(h_events['message.sender'][0]);
+
+				if(a_spent) {
+					debugger
+					// const [] = a_spent;
+					console.log(`🔔 ${this.label} was notified of a multi-spend for (?) TKN executed by ${k_sender.label}`);
+				}
+				else {
+					console.log(`🔔 ${this.label} was notified of a multi-spend for (?) TKN executed by ${k_sender.label}`);
+				}
 				debugger;
 			},
 		}, this);

@@ -11,7 +11,7 @@ import {__UNDEFINED, bigint_greater, bigint_lesser, canonicalize_json, is_number
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
-import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, exec_secret_contract, exec_fees} from '@solar-republic/neutrino';
+import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, exec_secret_contract, exec_fees, SecretApp} from '@solar-republic/neutrino';
 
 import {k_wallet_a, k_wallet_b, k_wallet_c, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
 import {migrate_contract, preload_original_contract, upload_code, type MigratedContractInterface} from './contract';
@@ -745,6 +745,10 @@ async function validate_state(b_premigrate=false) {
 
 		increaseAllowance Alice 50 Carol
 
+		increaseAllowance $a 1000 $a
+		increaseAllowance $c 100 $a
+		increaseAllowance $d 10 $a
+
 		---
 
 		transferFrom Carol 2 Alice David
@@ -762,41 +766,50 @@ async function validate_state(b_premigrate=false) {
 
 	// batch_* tests
 	const xg_limit = 800_000n;
-	// [
-	// 	{
-	// 		method: 'batch_transfer',
-	// 		groups: [
-	// 			{
-	// 				from: 'Alice',
-	// 				txs: [
-	// 					{
-	// 						actions: [
-	// 							{
-	// 								amount: '1',
-	// 							}
-	// 						]
-	// 					}
-	// 				],
-	// 			}
-	// 		],
-	// 	}
-	// ]
-	const a4_exec = await exec_secret_contract(k_snip_migrated, k_wallet_a, {
-		batch_transfer: {
-			actions: [
-				{
-					amount: '1' as CwUint128,
-					recipient: k_wallet_b.addr,
-				},
-				{
-					amount: '1' as CwUint128,
-					recipient: k_wallet_c.addr,
-				},
-			],
-		},
+	
+	// for testing batch operations
+	const k_app_migrated = SecretApp(k_wallet_a, k_snip_migrated);
+
+	// $a transfer from own twice (owner multispent packet-less, as sender)
+	// $a transfer to $b twice (recipient multirecvd packet-less)
+	// $a transfer to $c once (recipient multirecvd packet-full)
+	// $a transfer from $c once (owner multispent packet-full) ...?
+	const [g_batch_xfer_1] = await k_app_migrated.exec('batch_transfer_from', {
+		actions: [
+			{
+				owner: k_wallet_a.addr,
+				amount: '1' as CwUint128,
+				recipient: k_wallet_b.addr,
+			},
+			{
+				owner: k_wallet_a.addr,
+				amount: '2' as CwUint128,
+				recipient: k_wallet_c.addr,
+			},
+			{
+				owner: k_wallet_c.addr,
+				amount: '3' as CwUint128,
+				recipient: k_wallet_b.addr,
+			},
+		],
+	}, xg_limit);
+
+	// $a transfer from $c once (owner multispent packet-full)
+	// $a transfer to own once (recipient multirecvd packet-full, as sender)
+	const [g_batch_xfer_2] = await k_app_migrated.exec('batch_transfer_from', {
+		actions: [
+			{
+				owner: k_wallet_c.addr,
+				amount: '4' as CwUint128,
+				recipient: k_wallet_a.addr,
+			},
+		],
 	}, xg_limit);
 
 	debugger;
+
+	// failed to perform batch transfer
+	if(!g_batch_xfer_1 || !g_batch_xfer_2) throw Error(`Batch transfer test failed`);
 
 	// check that notifications were verified
 	for(const k_eoa of a_eoas) {

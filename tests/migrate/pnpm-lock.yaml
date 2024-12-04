@@ -18,8 +18,8 @@ importers:
         specifier: ^0.2.14
         version: 0.2.14
       '@solar-republic/neutrino':
-        specifier: 1.7.0-beta.23
-        version: 1.7.0-beta.23
+        specifier: 1.7.0-beta.24
+        version: 1.7.0-beta.24
       '@solar-republic/wasm-secp256k1':
         specifier: ^0.4.2
         version: 0.4.2
@@ -195,8 +195,8 @@ packages:
   '@solar-republic/crypto@0.2.14':
     resolution: {integrity: sha512-lm9U5QuBamqYAsdrJsnVfE7Uef4TyCvgLsgypPI1/RNjFdRCeKpMXoCRmJxeu3m/FzOhmPvX3WDd+ePCGw149w==}
 
-  '@solar-republic/neutrino@1.7.0-beta.23':
-    resolution: {integrity: sha512-i5uUZhXWF3eQENrbD7hxq2vkat+vbRjb81D3o486kRWgtERLKpw8Oxr1ZGP9qTwKfGDLoaPjseiePz/aVhP01Q==}
+  '@solar-republic/neutrino@1.7.0-beta.24':
+    resolution: {integrity: sha512-xuGU82CYIetx/qZ4kiSzkiwDrc9oE63PjfzI9+LEBswOuH2WC2SGt/saw6wv7sojMN5NmBbo6vWUVwsma/Lr3Q==}
 
   '@solar-republic/types@0.3.4':
     resolution: {integrity: sha512-UBTH+ZAyPcoC5axyCEFuhjiXn9gLMRgCNGFfayzU1IAIeWeIyzW+MN7u0LVHgA5OZxRFL2v/75AZC0vozV3lvw==}
@@ -1273,7 +1273,7 @@ snapshots:
       '@solar-republic/wasm-secp256k1': 0.2.9
       hash-wasm: 4.11.0
 
-  '@solar-republic/neutrino@1.7.0-beta.23':
+  '@solar-republic/neutrino@1.7.0-beta.24':
     dependencies:
       '@blake.regalia/belt': 0.45.3
       '@solar-republic/cosmos-grpc': 0.18.0-beta.6

@@ -23,7 +23,7 @@
     "@solar-republic/contractor": "^0.9.7",
     "@solar-republic/cosmos-grpc": "^0.18.0-beta.6",
     "@solar-republic/crypto": "^0.2.14",
-    "@solar-republic/neutrino": "1.7.0-beta.23",
+    "@solar-republic/neutrino": "1.7.0-beta.24",
     "@solar-republic/wasm-secp256k1": "^0.4.2",
     "bignumber.js": "^9.1.2",
     "ts-toolbelt": "^9.6.0"
