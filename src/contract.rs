@@ -33,9 +33,7 @@ use crate::msg::{
     InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
 };
 use crate::notifications::{
-    multi_recvd_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, 
-    MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_N, MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, 
-    MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE
+    multi_recvd_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_M, MULTI_RECEIVED_CHANNEL_BLOOM_N, MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, MULTI_SPENT_CHANNEL_BLOOM_M, MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
@@ -985,7 +983,7 @@ fn query_channel_info(
                     channel,
                     answer_id,
                     parameters: Some(BloomParameters {
-                        m: 512,
+                        m: MULTI_RECEIVED_CHANNEL_BLOOM_M,
                         k: MULTI_RECEIVED_CHANNEL_BLOOM_K,
                         h: "sha256".to_string(),
                     }),
@@ -998,7 +996,14 @@ fn query_channel_info(
                             label: "transfer".to_string(),
                             members: vec![
                                 FlatDescriptor {
-                                    r#type: "uint128".to_string(),
+                                    r#type: "uint8".to_string(),
+                                    label: "flags".to_string(),
+                                    description: Some(
+                                        "Bit field of [0]: sender is owner; [1]: contains memo".to_string(),
+                                    ),
+                                },
+                                FlatDescriptor {
+                                    r#type: "uint64".to_string(),
                                     label: "amount".to_string(),
                                     description: Some(
                                         "The transfer amount in base denomination".to_string(),
@@ -1027,7 +1032,7 @@ fn query_channel_info(
                     channel,
                     answer_id,
                     parameters: Some(BloomParameters {
-                        m: 512,
+                        m: MULTI_SPENT_CHANNEL_BLOOM_M,
                         k: MULTI_SPENT_CHANNEL_BLOOM_K,
                         h: "sha256".to_string(),
                     }),
@@ -1040,14 +1045,14 @@ fn query_channel_info(
                             label: "transfer".to_string(),
                             members: vec![
                                 FlatDescriptor {
-                                    r#type: "uint128".to_string(),
+                                    r#type: "uint64".to_string(),
                                     label: "amount".to_string(),
                                     description: Some(
                                         "The transfer amount in base denomination".to_string(),
                                     ),
                                 },
                                 FlatDescriptor {
-                                    r#type: "uint128".to_string(),
+                                    r#type: "uint64".to_string(),
                                     label: "balance".to_string(),
                                     description: Some(
                                         "Spender's new balance after the transfer".to_string(),
@@ -1250,12 +1255,23 @@ fn try_mint(
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
+    let received_notification = Notification::new(
+        recipient.clone(),
+        ReceivedNotificationData {
+            amount: minted_amount,
+            sender: None,
+            memo_len: memo.as_ref().map(|s| s.len()).unwrap_or_default(),
+            sender_is_owner: true,
+        },
+    )
+    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+
     // Note that even when minted_amount is equal to 0 we still want to perform the operations for logic consistency
     try_mint_impl(
         &mut deps,
         rng,
         info.sender,
-        recipient.clone(),
+        recipient,
         Uint128::new(minted_amount),
         constants.symbol,
         memo,
@@ -1263,15 +1279,6 @@ fn try_mint(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
     )?;
-
-    let received_notification = Notification::new(
-        recipient,
-        ReceivedNotificationData {
-            amount: minted_amount,
-            sender: None,
-        },
-    )
-    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
 
     let mut resp = Response::new()
         .set_data(to_binary(&ExecuteAnswer::Mint { status: Success })?);
@@ -1327,11 +1334,21 @@ fn try_batch_mint(
         #[cfg(feature = "gas_tracking")]
         let mut tracker: GasTracker = GasTracker::new(deps.api);
 
+        notifications.push(Notification::new (
+            recipient.clone(),
+            ReceivedNotificationData {
+                amount: actual_amount,
+                sender: None,
+                memo_len: action.memo.as_ref().map(|s| s.len()).unwrap_or_default(),
+                sender_is_owner: true,
+            },
+        ));
+
         try_mint_impl(
             &mut deps,
             rng,
             info.sender.clone(),
-            recipient.clone(),
+            recipient,
             Uint128::new(actual_amount),
             constants.symbol.clone(),
             action.memo,
@@ -1339,13 +1356,6 @@ fn try_batch_mint(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
         )?;
-        notifications.push(Notification::new (
-            recipient,
-            ReceivedNotificationData {
-                amount: actual_amount,
-                sender: None,
-            },
-        ));
     }
 
     let tx_hash = env
@@ -1353,6 +1363,7 @@ fn try_batch_mint(
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
         .hash.to_ascii_uppercase();
+
     let received_data = multi_recvd_data(
         deps.api,
         notifications,
@@ -1668,7 +1679,7 @@ fn try_redeem(
 fn try_transfer_impl(
     deps: &mut DepsMut,
     rng: &mut ContractPrng,
-    sender: &Addr,
+    owner: &Addr,
     recipient: &Addr,
     amount: Uint128,
     denom: String,
@@ -1676,17 +1687,28 @@ fn try_transfer_impl(
     block: &cosmwasm_std::BlockInfo,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
 ) -> StdResult<(Notification<ReceivedNotificationData>, Notification<SpentNotificationData>)> {
-    // canonicalize sender and recipient addresses
-    let raw_sender = deps.api.addr_canonicalize(sender.as_str())?;
+    // canonicalize owner and recipient addresses
+    let raw_owner = deps.api.addr_canonicalize(owner.as_str())?;
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
 
-    // perform the transfer from sender to recipient
-    let sender_balance = perform_transfer(
+    // create the tokens received notification for recipient
+    let received_notification = Notification::new(
+        recipient.clone(),
+        ReceivedNotificationData {
+            amount: amount.u128(),
+            sender: Some(owner.clone()),
+            memo_len: memo.as_ref().map(|s| s.len()).unwrap_or_default(),
+            sender_is_owner: true,
+        }
+    );
+
+    // perform the transfer from owner to recipient
+    let owner_balance = perform_transfer(
         deps.storage,
         rng,
-        &raw_sender,
+        &raw_owner,
         &raw_recipient,
-        &raw_sender,
+        &raw_owner,
         amount.u128(),
         denom,
         memo,
@@ -1696,23 +1718,14 @@ fn try_transfer_impl(
         false,
     )?;
 
-    // create the tokens received notification for recipient
-    let received_notification = Notification::new(
-        recipient.clone(),
-        ReceivedNotificationData {
-            amount: amount.u128(),
-            sender: Some(sender.clone()),
-        }
-    );
-
     // create the tokens spent notification for owner
     let spent_notification = Notification::new (
-        sender.clone(),
+        owner.clone(),
         SpentNotificationData {
             amount: amount.u128(),
             actions: 1,
             recipient: Some(recipient.clone()),
-            balance: sender_balance,
+            balance: owner_balance,
         }
     );
 
@@ -1860,7 +1873,10 @@ fn try_batch_transfer(
             return Err(StdError::generic_err(SEND_TO_SSCRT_CONTRACT_MSG));
         }
 
-        let (received_notification, spent_notification) = try_transfer_impl(
+        let (
+            received_notification,
+            spent_notification
+        ) = try_transfer_impl(
             &mut deps,
             rng,
             &info.sender,
@@ -1872,6 +1888,7 @@ fn try_batch_transfer(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
         )?;
+
         notifications.push((received_notification, spent_notification));
     }
 
@@ -2257,6 +2274,17 @@ fn try_transfer_from_impl(
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
+    // create tokens received notification for recipient
+    let received_notification = Notification::new(
+        recipient.clone(),
+        ReceivedNotificationData {
+            amount: amount.u128(),
+            sender: Some(owner.clone()),
+            memo_len: memo.as_ref().map(|s| s.len()).unwrap_or_default(),
+            sender_is_owner: spender == owner,
+        }
+    );
+    
     // perform the transfer from owner to recipient
     let owner_balance = perform_transfer(
         deps.storage,
@@ -2272,15 +2300,6 @@ fn try_transfer_from_impl(
         &mut tracker,
         true,
     )?;
-
-    // create tokens received notification for recipient
-    let received_notification = Notification::new(
-        recipient.clone(),
-        ReceivedNotificationData {
-            amount: amount.u128(),
-            sender: Some(owner.clone()),
-        }
-    );
 
     // create tokens spent notification for owner
     let spent_notification = Notification::new (
@@ -2374,6 +2393,7 @@ fn try_batch_transfer_from(
     for action in actions {
         let owner = deps.api.addr_validate(action.owner.as_str())?;
         let recipient = deps.api.addr_validate(action.recipient.as_str())?;
+
         let (
             received_notification,
             spent_notification
@@ -2388,6 +2408,7 @@ fn try_batch_transfer_from(
             symbol.clone(),
             action.memo,
         )?;
+
         notifications.push((received_notification, spent_notification));
     }
 
@@ -2401,6 +2422,7 @@ fn try_batch_transfer_from(
         Vec<Notification<ReceivedNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
+
     let received_data = multi_recvd_data(
         deps.api,
         received_notifications,
@@ -2408,6 +2430,7 @@ fn try_batch_transfer_from(
         env.block.random.clone().unwrap(),
         secret,
     )?;
+
     let spent_data = multi_spent_data(
         deps.api,
         spent_notifications,
