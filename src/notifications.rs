@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 
 const ZERO_ADDR: [u8; 20] = [0u8; 20];
 
-const CBL_ARRAY: usize = 1 + 200;
+const CBL_ARRAY: usize = 1;
 const CBL_U8: usize = 1;
 const CBL_U32: usize = 1 + 4;
-const CBL_BIGNUM_U64: usize = 1 + 8;
+const CBL_BIGNUM_U64: usize = 1 + 1 + 8;
 const CBL_TIMESTAMP: usize = 1 + 8;
 const CBL_ADDRESS: usize = 1 + 20;
 
@@ -79,17 +79,17 @@ impl<T: cbor_encode::Write> EncoderExt for Encoder<T> {
 
 #[derive(Serialize, Debug, Deserialize, Clone)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
-pub struct ReceivedNotificationData {
+pub struct RecvdNotificationData {
     pub amount: u128,
     pub sender: Option<Addr>,
     pub memo_len: usize,
     pub sender_is_owner: bool,
 }
 
-impl NotificationData for ReceivedNotificationData {
+impl NotificationData for RecvdNotificationData {
 	const CHANNEL_ID: &'static str = "recvd";
 	const CDDL_SCHEMA: &'static str = "recvd=[amount:biguint .size 8,sender:bstr .size 20,memo_len:uint .size 1]";
-    const ELEMENTS: u64 = 2;
+    const ELEMENTS: u64 = 3;
     const PAYLOAD_SIZE: usize = CBL_ARRAY + CBL_BIGNUM_U64 + CBL_ADDRESS + CBL_U8;
 
     fn encode_cbor(&self, api: &dyn Api, encoder: &mut Encoder<&mut [u8]>) -> StdResult<()> {
@@ -194,7 +194,7 @@ pub trait MultiRecipientNotificationData {
     fn build_packet(&self, api: &dyn Api) -> StdResult<Vec<u8>>;
 }
 
-impl MultiRecipientNotificationData for ReceivedNotificationData {
+impl MultiRecipientNotificationData for RecvdNotificationData {
     fn build_packet(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
         // make the received packet
         let mut packet_plaintext = [0u8; MULTI_RECVD_CHANNEL_PACKET_SIZE];
@@ -217,10 +217,10 @@ impl MultiRecipientNotificationData for ReceivedNotificationData {
         }
 
         // sender account (8 bytes)
-        packet_plaintext[8..].copy_from_slice(sender_bytes);
+        packet_plaintext[8..16].copy_from_slice(sender_bytes);
 
         // flags (1 byte)
-        packet_plaintext[0] = 0u8
+        packet_plaintext[16] = 0u8
             | ((self.sender_is_owner as u8) << 7)
             | (((self.memo_len != 0) as u8) << 6);
 
@@ -238,14 +238,14 @@ impl MultiRecipientNotificationData for SpentNotificationData {
         // amount bytes (u64 == 8 bytes)
         packet_plaintext.extend_from_slice(
             &self.amount
-                .clamp(0, u64::MAX as u128)
+                .clamp(0, u64::MAX.into())
                 .to_be_bytes()[8..]
         );
 
         // balance bytes (u64 == 8 bytes)
         packet_plaintext.extend_from_slice(
-            &self.amount
-                .clamp(0, u64::MAX as u128)
+            &self.balance
+                .clamp(0, u64::MAX.into())
                 .to_be_bytes()[8..]
         );
 
@@ -498,7 +498,7 @@ pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
 
 pub fn multi_recvd_data(
     api: &dyn Api,
-    notifications: Vec<Notification<ReceivedNotificationData>>,
+    notifications: Vec<Notification<RecvdNotificationData>>,
     tx_hash: &String,
     env_random: Binary,
     secret: &[u8],

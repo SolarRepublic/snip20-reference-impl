@@ -33,7 +33,7 @@ use crate::msg::{
     InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
 };
 use crate::notifications::{
-    multi_recvd_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, MULTI_RECVD_CHANNEL_BLOOM_K, MULTI_RECVD_CHANNEL_BLOOM_M, MULTI_RECVD_CHANNEL_BLOOM_N, MULTI_RECVD_CHANNEL_ID, MULTI_RECVD_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, MULTI_SPENT_CHANNEL_BLOOM_M, MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE
+    multi_recvd_data, multi_spent_data, AllowanceNotificationData, RecvdNotificationData, SpentNotificationData, MULTI_RECVD_CHANNEL_BLOOM_K, MULTI_RECVD_CHANNEL_BLOOM_M, MULTI_RECVD_CHANNEL_BLOOM_N, MULTI_RECVD_CHANNEL_ID, MULTI_RECVD_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, MULTI_SPENT_CHANNEL_BLOOM_M, MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
@@ -119,7 +119,7 @@ pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> StdResult<Response> 
 
     // Hard-coded channels
     let channels: Vec<String> = vec![
-        ReceivedNotificationData::CHANNEL_ID.to_string(),
+        RecvdNotificationData::CHANNEL_ID.to_string(),
         SpentNotificationData::CHANNEL_ID.to_string(),
         AllowanceNotificationData::CHANNEL_ID.to_string(),
         MULTI_RECVD_CHANNEL_ID.to_string(),
@@ -938,7 +938,7 @@ fn query_channel_info(
             answer_id = None;
         }
         match channel.as_str() {
-            ReceivedNotificationData::CHANNEL_ID => {
+            RecvdNotificationData::CHANNEL_ID => {
                 let channel_info_data = ChannelInfoData {
                     mode: "txhash".to_string(),
                     channel,
@@ -947,7 +947,7 @@ fn query_channel_info(
                     data: None,
                     next_id: None,
                     counter: None,
-                    cddl: Some(ReceivedNotificationData::CDDL_SCHEMA.to_string()),
+                    cddl: Some(RecvdNotificationData::CDDL_SCHEMA.to_string()),
                 };
                 channels_data.push(channel_info_data);
             }
@@ -1257,7 +1257,7 @@ fn try_mint(
 
     let received_notification = Notification::new(
         recipient.clone(),
-        ReceivedNotificationData {
+        RecvdNotificationData {
             amount: minted_amount,
             sender: None,
             memo_len: memo.as_ref().map(|s| s.len()).unwrap_or_default(),
@@ -1336,7 +1336,7 @@ fn try_batch_mint(
 
         notifications.push(Notification::new (
             recipient.clone(),
-            ReceivedNotificationData {
+            RecvdNotificationData {
                 amount: actual_amount,
                 sender: None,
                 memo_len: action.memo.as_ref().map(|s| s.len()).unwrap_or_default(),
@@ -1686,7 +1686,7 @@ fn try_transfer_impl(
     memo: Option<String>,
     block: &cosmwasm_std::BlockInfo,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
-) -> StdResult<(Notification<ReceivedNotificationData>, Notification<SpentNotificationData>)> {
+) -> StdResult<(Notification<RecvdNotificationData>, Notification<SpentNotificationData>)> {
     // canonicalize owner and recipient addresses
     let raw_owner = deps.api.addr_canonicalize(owner.as_str())?;
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
@@ -1694,7 +1694,7 @@ fn try_transfer_impl(
     // create the tokens received notification for recipient
     let received_notification = Notification::new(
         recipient.clone(),
-        ReceivedNotificationData {
+        RecvdNotificationData {
             amount: amount.u128(),
             sender: Some(owner.clone()),
             memo_len: memo.as_ref().map(|s| s.len()).unwrap_or_default(),
@@ -1899,7 +1899,7 @@ fn try_batch_transfer(
         .hash.to_ascii_uppercase();
 
     let (received_notifications, spent_notifications): (
-        Vec<Notification<ReceivedNotificationData>>,
+        Vec<Notification<RecvdNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
 
@@ -1993,7 +1993,7 @@ fn try_send_impl(
     msg: Option<Binary>,
     block: &cosmwasm_std::BlockInfo,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
-) -> StdResult<(Notification<ReceivedNotificationData>, Notification<SpentNotificationData>)> {
+) -> StdResult<(Notification<RecvdNotificationData>, Notification<SpentNotificationData>)> {
     let (
         received_notification,
         spent_notification
@@ -2160,7 +2160,7 @@ fn try_batch_send(
         .hash.to_ascii_uppercase();
 
     let (received_notifications, spent_notifications): (
-        Vec<Notification<ReceivedNotificationData>>,
+        Vec<Notification<RecvdNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
     let received_data = multi_recvd_data(
@@ -2258,7 +2258,7 @@ fn try_transfer_from_impl(
     amount: Uint128,
     denom: String,
     memo: Option<String>,
-) -> StdResult<(Notification<ReceivedNotificationData>, Notification<SpentNotificationData>)> {
+) -> StdResult<(Notification<RecvdNotificationData>, Notification<SpentNotificationData>)> {
     let raw_amount = amount.u128();
     let raw_spender = deps.api.addr_canonicalize(spender.as_str())?;
     let raw_owner = deps.api.addr_canonicalize(owner.as_str())?;
@@ -2277,7 +2277,7 @@ fn try_transfer_from_impl(
     // create tokens received notification for recipient
     let received_notification = Notification::new(
         recipient.clone(),
-        ReceivedNotificationData {
+        RecvdNotificationData {
             amount: amount.u128(),
             sender: Some(owner.clone()),
             memo_len: memo.as_ref().map(|s| s.len()).unwrap_or_default(),
@@ -2419,7 +2419,7 @@ fn try_batch_transfer_from(
         .hash.to_ascii_uppercase();
 
     let (received_notifications, spent_notifications): (
-        Vec<Notification<ReceivedNotificationData>>,
+        Vec<Notification<RecvdNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
 
@@ -2469,7 +2469,7 @@ fn try_send_from_impl(
     amount: Uint128,
     memo: Option<String>,
     msg: Option<Binary>,
-) -> StdResult<(Notification<ReceivedNotificationData>, Notification<SpentNotificationData>)> {
+) -> StdResult<(Notification<RecvdNotificationData>, Notification<SpentNotificationData>)> {
     let spender = info.sender.clone();
     let symbol = CONFIG.load(deps.storage)?.symbol;
     let (
@@ -2601,7 +2601,7 @@ fn try_batch_send_from(
         .hash.to_ascii_uppercase();
 
     let (received_notifications, spent_notifications): (
-        Vec<Notification<ReceivedNotificationData>>,
+        Vec<Notification<RecvdNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
     let received_data = multi_recvd_data(
