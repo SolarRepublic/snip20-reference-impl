@@ -184,7 +184,7 @@ impl NotificationData for AllowanceNotificationData {
         encoder
             .ext_u64_from_u128(self.amount)?
             .ext_bytes(allower_raw.as_slice())?
-            .ext_timestamp(self.expiration.unwrap_or(0u64))?;
+            .ext_timestamp(self.expiration.unwrap_or_default())?;
 
         Ok(())
     }

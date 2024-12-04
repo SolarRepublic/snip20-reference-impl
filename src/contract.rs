@@ -46,7 +46,7 @@ use crate::transaction_history::{
 
 /// We make sure that responses from `handle` are padded to a multiple of this size.
 pub const RESPONSE_BLOCK_SIZE: usize = 256;
-pub const NOTIFICATION_BLOCK_SIZE: usize = 36;
+pub const NOTIFICATION_BLOCK_SIZE: usize = 1;
 pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
 
 #[entry_point]
@@ -1264,7 +1264,7 @@ fn try_mint(
             sender_is_owner: true,
         },
     )
-    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+    .to_txhash_notification(deps.api, &env, secret, None)?;
 
     // Note that even when minted_amount is equal to 0 we still want to perform the operations for logic consistency
     try_mint_impl(
@@ -1924,7 +1924,7 @@ fn try_batch_transfer(
             balance: spent_notifications.last().unwrap().data.balance,
         }
     )
-    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+    .to_txhash_notification(deps.api, &env, secret, None)?;
 
     let mut resp = Response::new()
         .set_data(to_binary(&ExecuteAnswer::BatchTransfer { status: Success })?);
@@ -2073,10 +2073,10 @@ fn try_send(
         deps.api,
         &env,
         secret,
-        Some(NOTIFICATION_BLOCK_SIZE)
+        None
     )?;
     let spent_notification =
-        spent_notification.to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+        spent_notification.to_txhash_notification(deps.api, &env, secret, None)?;
 
     let mut resp = Response::new()
         .add_messages(messages)
@@ -2184,7 +2184,7 @@ fn try_batch_send(
             balance: spent_notifications.last().unwrap().data.balance,
         }
     )
-    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+    .to_txhash_notification(deps.api, &env, secret, None)?;
 
     let mut resp = Response::new()
         .add_messages(messages)
@@ -2346,18 +2346,19 @@ fn try_transfer_from(
         symbol,
         memo,
     )?;
+
     let received_notification = received_notification.to_txhash_notification(
         deps.api,
         &env,
         secret,
-        Some(NOTIFICATION_BLOCK_SIZE),
+        None,
     )?;
 
     let spent_notification = spent_notification.to_txhash_notification(
         deps.api, 
         &env, 
         secret, 
-        Some(NOTIFICATION_BLOCK_SIZE)
+        None
     )?;
 
     let mut resp = Response::new()
@@ -2539,10 +2540,10 @@ fn try_send_from(
         deps.api,
         &env,
         secret,
-        Some(NOTIFICATION_BLOCK_SIZE),
+        None,
     )?;
     let spent_notification =
-        spent_notification.to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+        spent_notification.to_txhash_notification(deps.api, &env, secret, None)?;
 
     let mut resp = Response::new()
         .add_messages(messages)
@@ -2733,7 +2734,7 @@ fn try_burn_from(
             balance: owner_balance,
         }
     )
-    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+    .to_txhash_notification(deps.api, &env, secret, None)?;
 
     let mut resp =  Response::new()
         .set_data(to_binary(&ExecuteAnswer::BurnFrom { status: Success })?);
@@ -2907,7 +2908,7 @@ fn try_increase_allowance(
             expiration,
         }
     )
-    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+    .to_txhash_notification(deps.api, &env, secret, None)?;
 
     let mut resp = Response::new()
         .set_data(to_binary(&ExecuteAnswer::IncreaseAllowance {
@@ -2964,7 +2965,7 @@ fn try_decrease_allowance(
             expiration,
         }
     )
-    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+    .to_txhash_notification(deps.api, &env, secret, None)?;
 
     let mut resp = Response::new()
         .set_data(to_binary(&ExecuteAnswer::DecreaseAllowance {
@@ -3131,7 +3132,7 @@ fn try_burn(
             balance: owner_balance,
         }
     )
-    .to_txhash_notification(deps.api, &env, secret, Some(NOTIFICATION_BLOCK_SIZE))?;
+    .to_txhash_notification(deps.api, &env, secret, None)?;
 
     let mut resp = Response::new()
         .set_data(to_binary(&ExecuteAnswer::Burn { status: Success })?);
