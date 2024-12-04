@@ -28,40 +28,47 @@ pub trait EncoderExt {
 }
 
 impl<T: cbor_encode::Write> EncoderExt for Encoder<T> {
+    #[inline]
     fn ext_tag(&mut self, tag: cbor_data::IanaTag) -> StdResult<&mut Self> {
         self
             .tag(cbor_data::Tag::from(tag))
                 .map_err(cbor_to_std_error)
     }
 
+    #[inline]
     fn ext_u8(&mut self, value: u8) -> StdResult<&mut Self> {
         self
             .u8(value)
                 .map_err(cbor_to_std_error)
     }
 
+    #[inline]
     fn ext_u32(&mut self, value: u32) -> StdResult<&mut Self> {
         self
             .u32(value)
                 .map_err(cbor_to_std_error)
     }
 
+    #[inline]
     fn ext_u64_from_u128(&mut self, value: u128) -> StdResult<&mut Self> {
         self
             .ext_tag(cbor_data::IanaTag::PosBignum)?
             .ext_bytes(&value.to_be_bytes()[8..])
     }
 
+    #[inline]
     fn ext_address(&mut self, value: CanonicalAddr) -> StdResult<&mut Self> {
         self.ext_bytes(&value.as_slice())
     }
 
+    #[inline]
     fn ext_bytes(&mut self, value: &[u8]) -> StdResult<&mut Self> {
         self
             .bytes(&value)
                 .map_err(cbor_to_std_error)
     }
 
+    #[inline]
     fn ext_timestamp(&mut self, value: u64) -> StdResult<&mut Self> {
         self
             .ext_tag(cbor_data::IanaTag::Timestamp)?
@@ -190,21 +197,16 @@ pub trait MultiRecipientNotificationData {
 impl MultiRecipientNotificationData for ReceivedNotificationData {
     fn build_packet(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
         // make the received packet
-        let mut packet_plaintext = [0u8; MULTI_RECEIVED_CHANNEL_PACKET_SIZE];
-
-        // flags (1 byte)
-        packet_plaintext[0] = 0u8
-            | ((self.sender_is_owner as u8) << 7)
-            | (((self.memo_len != 0) as u8) << 6);
+        let mut packet_plaintext = [0u8; MULTI_RECVD_CHANNEL_PACKET_SIZE];
 
         // amount bytes (u64 == 8 bytes)
-        packet_plaintext[1..9].copy_from_slice(
+        packet_plaintext[0..8].copy_from_slice(
             &self.amount
-                .clamp(0, u64::MAX as u128)
+                .clamp(0, u64::MAX.into())
                 .to_be_bytes()[8..]
         );
 
-        // sender account last 8 bytes
+        // last 8 bytes of sender account
         let sender_bytes: &[u8];
         let sender_raw;
         if let Some(sender) = &self.sender {
@@ -214,9 +216,15 @@ impl MultiRecipientNotificationData for ReceivedNotificationData {
             sender_bytes = &ZERO_ADDR[ZERO_ADDR.len() - 8..];
         }
 
-        // 17 bytes total
-        packet_plaintext[9..].copy_from_slice(sender_bytes);
+        // sender account (8 bytes)
+        packet_plaintext[8..].copy_from_slice(sender_bytes);
 
+        // flags (1 byte)
+        packet_plaintext[0] = 0u8
+            | ((self.sender_is_owner as u8) << 7)
+            | (((self.memo_len != 0) as u8) << 6);
+
+        // 17 bytes total
         Ok(packet_plaintext.to_vec())
     }
 }
@@ -260,23 +268,26 @@ impl MultiRecipientNotificationData for SpentNotificationData {
 
 
 // parameters for the `multirecvd` channel: <https://hur.st/bloomfilter/?n=16&p=&m=512&k=22>
-pub const MULTI_RECEIVED_CHANNEL_ID: &str = "multirecvd";
-pub const MULTI_RECEIVED_CHANNEL_BLOOM_N: usize = 16;
-pub const MULTI_RECEIVED_CHANNEL_BLOOM_M: u32 = 512;
-pub const MULTI_RECEIVED_CHANNEL_BLOOM_K: u32 = 22;
-pub const MULTI_RECEIVED_CHANNEL_PACKET_SIZE: usize = 17;
+pub const MULTI_RECVD_CHANNEL_ID: &str = "multirecvd";
+pub const MULTI_RECVD_CHANNEL_BLOOM_N: usize = 16;
+pub const MULTI_RECVD_CHANNEL_BLOOM_M: u32 = 512;
+pub const MULTI_RECVD_CHANNEL_BLOOM_K: u32 = 22;
+pub const MULTI_RECVD_CHANNEL_PACKET_SIZE: usize = 17;
 
 // derive the number of bytes needed for m bits
-pub const MULTI_RECEIVED_CHANNEL_BLOOM_M_LOG2: u32 = MULTI_RECEIVED_CHANNEL_BLOOM_M.ilog2();
+pub const MULTI_RECVD_CHANNEL_BLOOM_M_LOG2: u32 = MULTI_RECVD_CHANNEL_BLOOM_M.ilog2();
 
 // maximum supported filter size is currently 512 bits
-const_assert!(MULTI_RECEIVED_CHANNEL_BLOOM_M <= 512);
+const_assert!(MULTI_RECVD_CHANNEL_BLOOM_M <= 512);
 
 // ensure m is a power of 2
-const_assert!(MULTI_RECEIVED_CHANNEL_BLOOM_M.trailing_zeros() == MULTI_RECEIVED_CHANNEL_BLOOM_M_LOG2);
+const_assert!(MULTI_RECVD_CHANNEL_BLOOM_M.trailing_zeros() == MULTI_RECVD_CHANNEL_BLOOM_M_LOG2);
 
 // ensure there are enough bits in the 32-byte source hash to provide entropy for the hashes
-const_assert!(MULTI_RECEIVED_CHANNEL_BLOOM_K * MULTI_RECEIVED_CHANNEL_BLOOM_M_LOG2 <= 256);
+const_assert!(MULTI_RECVD_CHANNEL_BLOOM_K * MULTI_RECVD_CHANNEL_BLOOM_M_LOG2 <= 256);
+
+// this implementation is optimized to not check for packet sizes larger than 24 bytes
+const_assert!(MULTI_RECVD_CHANNEL_PACKET_SIZE <= 24);
 
 
 // parameters for the `multispent` channel: <https://hur.st/bloomfilter/?n=4&p=&m=128&k=22>
@@ -297,6 +308,10 @@ const_assert!(MULTI_SPENT_CHANNEL_BLOOM_M.trailing_zeros() == MULTI_SPENT_CHANNE
 
 // ensure there are enough bits in the 32-byte source hash to provide entropy for the hashes
 const_assert!(MULTI_SPENT_CHANNEL_BLOOM_K * MULTI_SPENT_CHANNEL_BLOOM_M_LOG2 <= 256);
+
+// this implementation is optimized to not check for packet sizes larger than 24 bytes
+const_assert!(MULTI_SPENT_CHANNEL_PACKET_SIZE <= 24);
+
 
 struct BloomFilter {
     filter: U512,
@@ -345,15 +360,15 @@ impl BloomFilter {
             packet_ciphertext,
         ].concat();
 
-        debug.extend_from_slice(&[0x11u8; 8]);
-        debug.extend_from_slice(&recipient.as_slice());
-        debug.extend_from_slice(&[0u8; 4]);
-        debug.extend_from_slice(&seed.as_slice());
-        debug.extend_from_slice(&[0u8; 4]);
-        debug.extend_from_slice(&id.0.as_slice());
-        debug.extend_from_slice(&[0u8; 4]);
-        debug.extend_from_slice(&hash_bytes.to_big_endian());
-        debug.extend_from_slice(&[0u8; 4]);
+        // debug.extend_from_slice(&[0x11u8; 8]);
+        // debug.extend_from_slice(&recipient.as_slice());
+        // debug.extend_from_slice(&[0u8; 4]);
+        // debug.extend_from_slice(&seed.as_slice());
+        // debug.extend_from_slice(&[0u8; 4]);
+        // debug.extend_from_slice(&id.0.as_slice());
+        // debug.extend_from_slice(&[0u8; 4]);
+        // debug.extend_from_slice(&hash_bytes.to_big_endian());
+        // debug.extend_from_slice(&[0u8; 4]);
 
         Ok(packet_bytes)
     }
@@ -467,7 +482,7 @@ pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
     // prep output bytes
     let mut output_bytes: Vec<u8> = vec![];
 
-    // append bloom filter (taking tail bytes only)
+    // append bloom filter (taking m bottom bits of 512-bit filter)
     output_bytes.extend_from_slice(
         &bloom_filter.filter.to_big_endian()[((512 - (1 << bloom_m_log2)) >> 3)..]);
 
@@ -476,7 +491,7 @@ pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
         output_bytes.extend(packet.iter());
     }
 
-    output_bytes.extend(debug.iter());
+    // output_bytes.extend(debug.iter());
 
     Ok(output_bytes)
 }
@@ -494,11 +509,11 @@ pub fn multi_recvd_data(
         tx_hash,
         env_random,
         secret,
-        MULTI_RECEIVED_CHANNEL_PACKET_SIZE,
-        MULTI_RECEIVED_CHANNEL_BLOOM_N,
-        MULTI_RECEIVED_CHANNEL_BLOOM_M_LOG2,
-        MULTI_RECEIVED_CHANNEL_BLOOM_K,
-        MULTI_RECEIVED_CHANNEL_ID,
+        MULTI_RECVD_CHANNEL_PACKET_SIZE,
+        MULTI_RECVD_CHANNEL_BLOOM_N,
+        MULTI_RECVD_CHANNEL_BLOOM_M_LOG2,
+        MULTI_RECVD_CHANNEL_BLOOM_K,
+        MULTI_RECVD_CHANNEL_ID,
     )
 }
 

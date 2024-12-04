@@ -33,7 +33,7 @@ use crate::msg::{
     InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
 };
 use crate::notifications::{
-    multi_recvd_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, MULTI_RECEIVED_CHANNEL_BLOOM_K, MULTI_RECEIVED_CHANNEL_BLOOM_M, MULTI_RECEIVED_CHANNEL_BLOOM_N, MULTI_RECEIVED_CHANNEL_ID, MULTI_RECEIVED_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, MULTI_SPENT_CHANNEL_BLOOM_M, MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE
+    multi_recvd_data, multi_spent_data, AllowanceNotificationData, ReceivedNotificationData, SpentNotificationData, MULTI_RECVD_CHANNEL_BLOOM_K, MULTI_RECVD_CHANNEL_BLOOM_M, MULTI_RECVD_CHANNEL_BLOOM_N, MULTI_RECVD_CHANNEL_ID, MULTI_RECVD_CHANNEL_PACKET_SIZE, MULTI_SPENT_CHANNEL_BLOOM_K, MULTI_SPENT_CHANNEL_BLOOM_M, MULTI_SPENT_CHANNEL_BLOOM_N, MULTI_SPENT_CHANNEL_ID, MULTI_SPENT_CHANNEL_PACKET_SIZE
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
@@ -122,7 +122,7 @@ pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> StdResult<Response> 
         ReceivedNotificationData::CHANNEL_ID.to_string(),
         SpentNotificationData::CHANNEL_ID.to_string(),
         AllowanceNotificationData::CHANNEL_ID.to_string(),
-        MULTI_RECEIVED_CHANNEL_ID.to_string(),
+        MULTI_RECVD_CHANNEL_ID.to_string(),
         MULTI_SPENT_CHANNEL_ID.to_string(),
     ];
 
@@ -977,31 +977,24 @@ fn query_channel_info(
                 };
                 channels_data.push(channel_info_data);
             }
-            MULTI_RECEIVED_CHANNEL_ID => {
+            MULTI_RECVD_CHANNEL_ID => {
                 let channel_info_data = ChannelInfoData {
                     mode: "bloom".to_string(),
                     channel,
                     answer_id,
                     parameters: Some(BloomParameters {
-                        m: MULTI_RECEIVED_CHANNEL_BLOOM_M,
-                        k: MULTI_RECEIVED_CHANNEL_BLOOM_K,
+                        m: MULTI_RECVD_CHANNEL_BLOOM_M,
+                        k: MULTI_RECVD_CHANNEL_BLOOM_K,
                         h: "sha256".to_string(),
                     }),
                     data: Some(Descriptor {
-                        r#type: format!("packet[{}]", MULTI_RECEIVED_CHANNEL_BLOOM_N),
+                        r#type: format!("packet[{}]", MULTI_RECVD_CHANNEL_BLOOM_N),
                         version: "1".to_string(),
-                        packet_size: MULTI_RECEIVED_CHANNEL_PACKET_SIZE as u32,
+                        packet_size: MULTI_RECVD_CHANNEL_PACKET_SIZE as u32,
                         data: StructDescriptor {
                             r#type: "struct".to_string(),
                             label: "transfer".to_string(),
                             members: vec![
-                                FlatDescriptor {
-                                    r#type: "uint8".to_string(),
-                                    label: "flags".to_string(),
-                                    description: Some(
-                                        "Bit field of [0]: sender is owner; [1]: contains memo".to_string(),
-                                    ),
-                                },
                                 FlatDescriptor {
                                     r#type: "uint64".to_string(),
                                     label: "amount".to_string(),
@@ -1015,6 +1008,13 @@ fn query_channel_info(
                                     description: Some(
                                         "The last 8 bytes of the sender's canonical address"
                                             .to_string(),
+                                    ),
+                                },
+                                FlatDescriptor {
+                                    r#type: "uint8".to_string(),
+                                    label: "flags".to_string(),
+                                    description: Some(
+                                        "Bit field of [0]: sender is owner; [1]: contains memo".to_string(),
                                     ),
                                 },
                             ],
@@ -1379,7 +1379,7 @@ fn try_batch_mint(
     
     if NOTIFICATIONS_ENABLED.load(deps.storage)? {
         resp = resp.add_attribute_plaintext(
-            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            format!("snip52:#{}", MULTI_RECVD_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
         );
     }
@@ -1931,7 +1931,7 @@ fn try_batch_transfer(
 
     if NOTIFICATIONS_ENABLED.load(deps.storage)? {
         resp = resp.add_attribute_plaintext(
-            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            format!("snip52:#{}", MULTI_RECVD_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
         )
         .add_attribute_plaintext(
@@ -2192,7 +2192,7 @@ fn try_batch_send(
 
     if NOTIFICATIONS_ENABLED.load(deps.storage)? {
         resp = resp.add_attribute_plaintext(
-            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            format!("snip52:#{}", MULTI_RECVD_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
         )
         .add_attribute_plaintext(
@@ -2444,7 +2444,7 @@ fn try_batch_transfer_from(
 
     if NOTIFICATIONS_ENABLED.load(deps.storage)? {
         resp = resp.add_attribute_plaintext(
-            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            format!("snip52:#{}", MULTI_RECVD_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
         )
         .add_attribute_plaintext(
@@ -2627,7 +2627,7 @@ fn try_batch_send_from(
 
     if NOTIFICATIONS_ENABLED.load(deps.storage)? {
         resp = resp.add_attribute_plaintext(
-            format!("snip52:#{}", MULTI_RECEIVED_CHANNEL_ID),
+            format!("snip52:#{}", MULTI_RECVD_CHANNEL_ID),
             Binary::from(received_data).to_base64(),
         )
         .add_attribute_plaintext(
