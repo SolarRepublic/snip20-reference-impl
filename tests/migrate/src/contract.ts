@@ -53,17 +53,17 @@ export type MigratedContractInterface = SecretContractInterface<{
 						type: 'struct';
 						members: [
 							{
-								label: 'flags';
-								type: 'uint8';
-							},
-							{
-								label: 'amount';
+								label: 'flagsAndAmount';
 								type: 'uint64';
 							},
 							{
 								label: 'recipientId';
 								type: 'bytes8';
 							},
+							// {
+							// 	label: 'checksum';
+							// 	type: 'uint8';
+							// },
 						];
 					};
 				};
@@ -78,15 +78,19 @@ export type MigratedContractInterface = SecretContractInterface<{
 						type: 'struct';
 						members: [
 							{
-								label: 'amount';
-								type: 'uint64';
-							},
-							{
-								label: 'balance';
+								label: 'flagsAndAmount';
 								type: 'uint64';
 							},
 							{
 								label: 'recipientId';
+								type: 'bytes8';
+							},
+							// {
+							// 	label: 'checksum';
+							// 	type: 'uint8';
+							// },
+							{
+								label: 'balance';
 								type: 'uint64';
 							},
 						];

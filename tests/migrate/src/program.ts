@@ -1,8 +1,8 @@
 import type {Snip20TransferEvent, Snip250TxEvent} from './types';
-import type {Snip20, SecretAccAddr} from '@solar-republic/contractor';
+import type {Snip20, SecretAccAddr, Snip22Executions} from '@solar-republic/contractor';
 
 
-import type {CwUint128, WeakSecretAccAddr} from '@solar-republic/types';
+import type {CwUint128, WeakSecretAccAddr, WeakUintStr} from '@solar-republic/types';
 
 import {readFileSync} from 'node:fs';
 
@@ -13,7 +13,7 @@ import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
 import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, exec_secret_contract, exec_fees, SecretApp} from '@solar-republic/neutrino';
 
-import {k_wallet_a, k_wallet_b, k_wallet_c, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
+import {k_wallet_a, k_wallet_b, k_wallet_c, k_wallet_d, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
 import {migrate_contract, preload_original_contract, upload_code, type MigratedContractInterface} from './contract';
 import {bank, balance, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
@@ -764,52 +764,58 @@ async function validate_state(b_premigrate=false) {
 	// validate
 	await validate_state(false);
 
-	// batch_* tests
-	const xg_limit = 800_000n;
-	
 	// for testing batch operations
 	const k_app_migrated = SecretApp(k_wallet_a, k_snip_migrated);
 
-	// $a transfer from own twice (owner multispent packet-less, as sender)
-	// $a transfer to $b twice (recipient multirecvd packet-less)
-	// $a transfer to $c once (recipient multirecvd packet-full)
-	// $a transfer from $c once (owner multispent packet-full) ...?
-	const [g_batch_xfer_1] = await k_app_migrated.exec('batch_transfer_from', {
-		actions: [
-			{
-				owner: k_wallet_a.addr,
-				amount: '1' as CwUint128,
-				recipient: k_wallet_b.addr,
-			},
-			{
-				owner: k_wallet_a.addr,
-				amount: '2' as CwUint128,
-				recipient: k_wallet_c.addr,
-			},
-			{
-				owner: k_wallet_c.addr,
-				amount: '3' as CwUint128,
-				recipient: k_wallet_b.addr,
-			},
-		],
-	}, xg_limit);
+	// prep batch transfer from method
+	const batch_transfer_from = (
+		a_actions: {
+			owner: WeakSecretAccAddr;
+			amount: WeakUintStr;
+			recipient: WeakSecretAccAddr;
+			memo?: string;
+		}[]
+	) => k_app_migrated.exec('batch_transfer_from', {
+		actions: a_actions as Snip22Executions['batch_transfer_from'][0]['actions'],
+	}, 800_000n);
 
-	// $a transfer from $c once (owner multispent packet-full)
-	// $a transfer to own once (recipient multirecvd packet-full, as sender)
-	const [g_batch_xfer_2] = await k_app_migrated.exec('batch_transfer_from', {
-		actions: [
-			{
-				owner: k_wallet_c.addr,
-				amount: '4' as CwUint128,
-				recipient: k_wallet_a.addr,
-			},
-		],
-	}, xg_limit);
+	// packet-less multispend on $a, as sender
+	// packet-less multirecvd on $b
+	// packet-full multirecvd on $c
+	// packet-full multispend on $c
+	const [g_batch_xfer_1] = await batch_transfer_from([
+		{owner:k_wallet_a.addr, amount:'1', recipient:k_wallet_b.addr},
+		{owner:k_wallet_a.addr, amount:'2', recipient:k_wallet_c.addr},
+		{owner:k_wallet_c.addr, amount:'3', recipient:k_wallet_b.addr},
+	]);
 
-	debugger;
+	// packet-full mutlirecvd on $a, as sender
+	// packet-full multispend on $c (again)
+	const [g_batch_xfer_2] = await batch_transfer_from([
+		{owner:k_wallet_c.addr, amount:'4', recipient:k_wallet_a.addr},
+	]);
 
-	// failed to perform batch transfer
-	if(!g_batch_xfer_1 || !g_batch_xfer_2) throw Error(`Batch transfer test failed`);
+	// packet-less multirecvd on $a, as sender
+	// packet-less multispend on $c
+	const [g_batch_xfer_3] = await batch_transfer_from([
+		{owner:k_wallet_c.addr, amount:'5', recipient:k_wallet_a.addr},
+		{owner:k_wallet_c.addr, amount:'6', recipient:k_wallet_a.addr},
+	]);
+
+	// packet-full multispend on $a, as sender
+	const [g_batch_xfer_4] = await batch_transfer_from([
+		{owner:k_wallet_a.addr, amount:'7', recipient:k_wallet_d.addr},
+	]);
+
+	// packet-full multispend on $a + with memo, as sender
+	// packet-full multispend on $c + with memo
+	const [g_batch_xfer_5] = await batch_transfer_from([
+		{owner:k_wallet_a.addr, amount:'8', recipient:k_wallet_b.addr, memo:'foo'},
+		{owner:k_wallet_c.addr, amount:'9', recipient:k_wallet_d.addr, memo:'foo'},
+	]);
+
+	// failed to perform batch transfer froms
+	if(!g_batch_xfer_1 || !g_batch_xfer_2 || !g_batch_xfer_3 || !g_batch_xfer_4 || !g_batch_xfer_5) throw Error(`Batch transfer test failed`);
 
 	// check that notifications were verified
 	for(const k_eoa of a_eoas) {

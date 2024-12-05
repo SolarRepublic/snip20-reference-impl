@@ -4,7 +4,7 @@ import type {Dict, Nilable} from '@blake.regalia/belt';
 import type {EventUnlistener, Wallet, SecretContract} from '@solar-republic/neutrino';
 import type {Snip24QueryPermitSigned, WeakSecretAccAddr, CwSecretAccAddr} from '@solar-republic/types';
 
-import {bytes_to_hex, crypto_random_bytes, entries, keys, remove, sha256, text_to_bytes} from '@blake.regalia/belt';
+import {base93_to_bytes, biguint_to_bytes_be, bytes, bytes_to_base93, bytes_to_hex, concat2, crypto_random_bytes, entries, keys, remove, sha256, text_to_bytes} from '@blake.regalia/belt';
 import {bech32_decode, bech32_encode, pubkey_to_bech32} from '@solar-republic/crypto';
 import {subscribe_snip52_channels} from '@solar-republic/neutrino';
 import {initWasmSecp256k1} from '@solar-republic/wasm-secp256k1';
@@ -23,6 +23,14 @@ const H_ACCOUNT_VARS: Dict<Uint8Array> = {
 	c: atu8_sk_c,
 	d: atu8_sk_d,
 };
+
+const atu8_table = base93_to_bytes("bpLe3pROr=y;r&]>^7g5W|^`7Xr0#zC?]LBZoJ>0}duBd}f,7M$+gHYm:1QmoFoS}a's[hX6pmfENxu2;/3kIx.Ot]4UrJXRkVG2}LD]@d0;Khs<Kc&]L$S$SN8v]?]M]oD+qQLLt.*XSz{upl@9^YEK1`di0(}/a)1&L& 9SdCR>alzeN#a3N&:@BS4rX!R<Ly8$^4=+9OWOgPYa5M^fd;|>L8]q&rnuVVY9&i!WIGfZzF,D.#=%z,KLY6Kq.D8*8f/d&fy4^0PiYD%dM!o~W9sE**#.F-_v6q9Mj']? ;Mxy4OHDH!,jQ,nL");
+
+function crc8_opensafety(atu8_data: Uint8Array, xb_checksum=0): number {
+	for(let xb_byte of atu8_data) xb_checksum = atu8_table[xb_checksum ^ xb_byte];
+	return xb_checksum;
+}
+
 
 const h_cached_aliases: Dict<ExternallyOwnedAccount> = {};
 const h_cached_addresses: Dict<ExternallyOwnedAccount> = {};
@@ -284,21 +292,32 @@ export class ExternallyOwnedAccount {
 				const k_sender = ExternallyOwnedAccount.at(h_events['message.sender'][0]);
 
 				if(a_packet) {
-					const [xg_flags, xg_amount, atu8_term] = a_packet;
+					const [xg_flags_amount, atu8_term] = a_packet;
+
+					// extract flags
+					const b_memo_exits = xg_flags_amount & (1n << 63n);
+					const b_sender_is_owner = xg_flags_amount & (1n << 62n);
+
+					// extract amount
+					const xg_amount = xg_flags_amount & ((1n << 62n) - 1n);
 
 					const s0x_sender = bytes_to_hex(atu8_term);
 
 					let s_from = '';
 
 					// sender is owner
-					if(xg_flags & 0x80n) {
+					if(b_sender_is_owner) {
 						s_from = k_sender.label;
 					}
 					else {
+						// find matches by comparing against each possible address
 						const a_matches: ExternallyOwnedAccount[] = [];
-
 						for(const [sa_addr, k_eoa] of entries(h_cached_addresses)) {
-							if(s0x_sender === bytes_to_hex(bech32_decode(sa_addr).subarray(-8))) {
+							// bech32 decode address to bytes
+							const atu8_addr = bech32_decode(sa_addr);
+
+							// hit on sender ID
+							if(s0x_sender === bytes_to_hex(atu8_addr.subarray(-8))) {
 								a_matches.push(k_eoa);
 							}
 						}
@@ -306,27 +325,48 @@ export class ExternallyOwnedAccount {
 						s_from = `...${s0x_sender}:[${a_matches.map(k => k.label).join(', ')}]`;
 					}
 
-					console.log(`🔔 ${this.label} received multi-recipient transfer for ${xg_amount} TKN from ${s_from} ${xg_flags & 0x40n? `WITH memo`: 'no memo'} executed by ${k_sender.label}`);
+					console.log(`🔔 ${this.label} received notification: ${s_from} sent ${xg_amount} TKN ${b_memo_exits? 'WITH': 'no'} memo; executed by ${k_sender.label}`);
 				}
 				else {
-					console.log(`🔔 ${this.label} received multi-recipient transfer for (?) TKN executed by ${k_sender.label}`);
+					console.log(`🔔 ${this.label} received notification: (?) sent (?) TKN; executed by ${k_sender.label}`);
 				}
-
-				debugger;
 			},
 
 			multispent: (a_spent, atu8_data, g_tx, h_events) => {
 				const k_sender = ExternallyOwnedAccount.at(h_events['message.sender'][0]);
 
 				if(a_spent) {
-					debugger
-					// const [] = a_spent;
-					console.log(`🔔 ${this.label} was notified of a multi-spend for (?) TKN executed by ${k_sender.label}`);
+					// destructure tuple
+					const [xg_flags_amount, atu8_term, xg_balance] = a_spent;
+
+					// extract flags
+					const b_memo_exits = xg_flags_amount & (1n << 63n);
+
+					// extract amount
+					const xg_amount = xg_flags_amount & ((1n << 62n) - 1n);
+
+					// encode recipient
+					const s0x_recipient = bytes_to_hex(atu8_term);
+
+					// find matches by comparing against each possible address
+					const a_matches: ExternallyOwnedAccount[] = [];
+					for(const [sa_addr, k_eoa] of entries(h_cached_addresses)) {
+						// bech32 decode address to bytes
+						const atu8_addr = bech32_decode(sa_addr);
+
+						// hit on sender ID
+						if(s0x_recipient === bytes_to_hex(atu8_addr.subarray(-8))) {
+							a_matches.push(k_eoa);
+						}
+					}
+
+					const s_to = `...${s0x_recipient}:[${a_matches.map(k => k.label).join(', ')}]`;
+
+					console.log(`🔔 ${this.label} received notification: ${k_sender.label} spent ${xg_amount} TKN => ${s_to} ${b_memo_exits? 'WITTH': 'no'} memo; new balance: ${xg_balance}`);
 				}
 				else {
-					console.log(`🔔 ${this.label} was notified of a multi-spend for (?) TKN executed by ${k_sender.label}`);
+					console.log(`🔔 ${this.label} received notification: ${k_sender.label} spent (?) TKN => (?)`);
 				}
-				debugger;
 			},
 		}, this);
 	}
