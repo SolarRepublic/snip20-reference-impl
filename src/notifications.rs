@@ -9,6 +9,22 @@ use serde::{Deserialize, Serialize};
 
 const ZERO_ADDR: [u8; 20] = [0u8; 20];
 
+// maximum value that can be stored in 56 bits (7 bytes)
+const U56_MAX: u128 = (1 << 56) - 1;
+
+// maximum value that can be stored in 62 bits
+const U62_MAX: u128 = (1 << 62) - 1;
+
+// maximum value that can be stored in 63 bits
+const U63_MAX: u128 = (1 << 63) - 1;
+
+// // CRC-6/G-704
+// const CRC_6_G_704: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_6_G_704);
+
+// CRC-8/OPENSAFETY
+const CRC_8_OPENSAFETY: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_OPENSAFETY);
+
+
 const CBL_ARRAY: usize = 1;
 const CBL_U8: usize = 1;
 const CBL_U32: usize = 1 + 4;
@@ -126,6 +142,7 @@ pub struct SpentNotificationData {
     pub actions: u32,
     pub recipient: Option<Addr>,
     pub balance: u128,
+    pub memo_len: usize,
 }
 
 
@@ -190,39 +207,39 @@ impl NotificationData for AllowanceNotificationData {
     }
 }
 
-pub trait MultiRecipientNotificationData {
+pub trait MultiRecipNotificationData {
     fn build_packet(&self, api: &dyn Api) -> StdResult<Vec<u8>>;
 }
 
-impl MultiRecipientNotificationData for RecvdNotificationData {
+impl MultiRecipNotificationData for RecvdNotificationData {
     fn build_packet(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
         // make the received packet
         let mut packet_plaintext = [0u8; MULTI_RECVD_CHANNEL_PACKET_SIZE];
 
-        // amount bytes (u64 == 8 bytes)
-        packet_plaintext[0..8].copy_from_slice(
-            &self.amount
-                .clamp(0, u64::MAX.into())
-                .to_be_bytes()[8..]
-        );
+        // encode flags and amount into 8 bytes
+        let amount_bytes = &(self.amount.clamp(0, U62_MAX)
+            | (((self.memo_len != 0) as u128) << 63)
+            | ((self.sender_is_owner as u128) << 62)
+        ).to_be_bytes()[8..];
 
-        // last 8 bytes of sender account
-        let sender_bytes: &[u8];
-        let sender_raw;
-        if let Some(sender) = &self.sender {
-            sender_raw = api.addr_canonicalize(sender.as_str())?;
-            sender_bytes = &sender_raw.as_slice()[sender_raw.0.len() - 8..];
+        // packet flag bits and amount bytes (u64 == 8 bytes)
+        packet_plaintext[0..8].copy_from_slice(amount_bytes);
+
+        // determine owner address
+        let owner_addr: CanonicalAddr;
+        let owner_bytes: &[u8];
+        if let Some(owner) = &self.sender {
+            owner_addr = api.addr_canonicalize(owner.as_str())?;
+            owner_bytes = &owner_addr.as_slice()
         } else {
-            sender_bytes = &ZERO_ADDR[ZERO_ADDR.len() - 8..];
+            owner_bytes = &ZERO_ADDR;
         }
 
-        // sender account (8 bytes)
-        packet_plaintext[8..16].copy_from_slice(sender_bytes);
+        // packet owner address terminal 8 bytes (8 bytes)
+        packet_plaintext[8..16].copy_from_slice(&owner_bytes[12..]);
 
-        // flags (1 byte)
-        packet_plaintext[16] = 0u8
-            | ((self.sender_is_owner as u8) << 7)
-            | (((self.memo_len != 0) as u8) << 6);
+        // // CRC-8 checksum (1 byte)
+        // packet_plaintext[16] = CRC_8_OPENSAFETY.checksum(owner_bytes);
 
         // 17 bytes total
         Ok(packet_plaintext.to_vec())
@@ -230,38 +247,43 @@ impl MultiRecipientNotificationData for RecvdNotificationData {
 }
 
 
-impl MultiRecipientNotificationData for SpentNotificationData {
+impl MultiRecipNotificationData for SpentNotificationData {
     fn build_packet(&self, api: &dyn Api) -> StdResult<Vec<u8>> {
         // prep the packet plaintext
-        let mut packet_plaintext = vec![0u8; MULTI_SPENT_CHANNEL_PACKET_SIZE];
+        let mut packet_plaintext = [0u8; MULTI_SPENT_CHANNEL_PACKET_SIZE];
 
-        // amount bytes (u64 == 8 bytes)
-        packet_plaintext.extend_from_slice(
-            &self.amount
-                .clamp(0, u64::MAX.into())
-                .to_be_bytes()[8..]
-        );
+        // encode flags and amount into 8 bytes
+        let amount_bytes = &(self.amount.clamp(0, U63_MAX)
+            | (((self.memo_len != 0) as u128) << 63)
+        ).to_be_bytes()[8..];
+
+        // packet amount bytes (u56 == 7 bytes)
+        packet_plaintext[0..8].copy_from_slice(amount_bytes);
+
+        // determine recipient address
+        let recipient_addr: CanonicalAddr;
+        let recipient_bytes: &[u8];
+        if let Some(recipient) = &self.recipient {
+            recipient_addr = api.addr_canonicalize(recipient.as_str())?;
+            recipient_bytes = recipient_addr.as_slice();
+        } else {
+            recipient_bytes = &ZERO_ADDR;
+        }
+
+        // packet recipient address terminal 8 bytes (8 bytes)
+        packet_plaintext[8..16].copy_from_slice(&recipient_bytes[12..]);
+
+        // // packet CRC-8 checksum of recipientFullAddr (1 byte)
+        // packet_plaintext[15] = CRC_8_OPENSAFETY.checksum(recipient_bytes);
 
         // balance bytes (u64 == 8 bytes)
-        packet_plaintext.extend_from_slice(
+        packet_plaintext[16..24].copy_from_slice(
             &self.balance
                 .clamp(0, u64::MAX.into())
                 .to_be_bytes()[8..]
         );
 
-        // recipient account last 8 bytes
-        let recipient_bytes: &[u8];
-        let recipient_raw;
-        if let Some(recipient) = &self.recipient {
-            recipient_raw = api.addr_canonicalize(recipient.as_str())?;
-            recipient_bytes = &recipient_raw.as_slice()[recipient_raw.0.len() - 8..];
-        } else {
-            recipient_bytes = &ZERO_ADDR[ZERO_ADDR.len() - 8..];
-        }
-
         // 24 bytes total
-        packet_plaintext.extend_from_slice(recipient_bytes);
-
         Ok(packet_plaintext.to_vec())
     }
 }
@@ -328,7 +350,6 @@ impl BloomFilter {
         &mut self,
         recipient: &CanonicalAddr,
         packet_plaintext: &Vec<u8>,
-        debug: &mut Vec<u8>,
     ) -> StdResult<Vec<u8>> {
         // contribute to received bloom filter
         let seed = get_seed(&recipient, &self.secret)?;
@@ -360,21 +381,11 @@ impl BloomFilter {
             packet_ciphertext,
         ].concat();
 
-        // debug.extend_from_slice(&[0x11u8; 8]);
-        // debug.extend_from_slice(&recipient.as_slice());
-        // debug.extend_from_slice(&[0u8; 4]);
-        // debug.extend_from_slice(&seed.as_slice());
-        // debug.extend_from_slice(&[0u8; 4]);
-        // debug.extend_from_slice(&id.0.as_slice());
-        // debug.extend_from_slice(&[0u8; 4]);
-        // debug.extend_from_slice(&hash_bytes.to_big_endian());
-        // debug.extend_from_slice(&[0u8; 4]);
-
         Ok(packet_bytes)
     }
 }
 
-pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
+pub fn multi_data<N: NotificationData + MultiRecipNotificationData>(
     api: &dyn Api,
     notifications: Vec<Notification<N>>,
     tx_hash: &String,
@@ -397,10 +408,10 @@ pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
         channel_id: channel_id.to_string(),
     };
 
+    let mut debug = vec![0u8];
+
     // packet structs
     let mut packets: Vec<(CanonicalAddr, Vec<u8>)> = vec![];
-
-    let mut debug = vec![0u8];
 
     // keep track of how many times an address shows up in packet data
     let mut recipient_counts: HashMap<CanonicalAddr, u16> = HashMap::new();
@@ -427,11 +438,14 @@ pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
         // build packet
         let packet_plaintext = &notification.data.build_packet(api)?;
 
+        debug.extend_from_slice(&[0x11; 8]);
+        debug.extend_from_slice(packet_plaintext);
+        debug.extend_from_slice(&[0xff; 4]);
+
         // add to bloom filter
         let packet_bytes = bloom_filter.add(
             &notifyee,
             packet_plaintext,
-            &mut debug,
         )?;
 
         // add to packets data
@@ -461,8 +475,6 @@ pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
             padding_size * 20,  // 20 bytes per random addr
         )?;
 
-        let nodebug= &mut vec![0u8];
-
         // handle each padding package
         for i in 0..padding_size {
             // generate address
@@ -472,7 +484,7 @@ pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
             let packet_plaintext = vec![0u8; packet_size];
 
             // produce bytes
-            let packet_bytes = bloom_filter.add(&address, &packet_plaintext,nodebug)?;
+            let packet_bytes = bloom_filter.add(&address, &packet_plaintext)?;
 
             // add to packets list
             packets.push(packet_bytes);
@@ -491,7 +503,7 @@ pub fn multi_data<N: NotificationData + MultiRecipientNotificationData>(
         output_bytes.extend(packet.iter());
     }
 
-    // output_bytes.extend(debug.iter());
+    output_bytes.extend_from_slice(&debug);
 
     Ok(output_bytes)
 }

@@ -997,24 +997,23 @@ fn query_channel_info(
                             members: vec![
                                 FlatDescriptor {
                                     r#type: "uint64".to_string(),
-                                    label: "amount".to_string(),
+                                    label: "flagsAndAmount".to_string(),
                                     description: Some(
-                                        "The transfer amount in base denomination".to_string(),
+                                        "Bit field of [0]: non-empty memo; [2]: sender is owner; [2..]: uint62 transfer amount in base denomination".to_string(),
                                     ),
                                 },
                                 FlatDescriptor {
                                     r#type: "bytes8".to_string(),
-                                    label: "spender".to_string(),
+                                    label: "ownerId".to_string(),
                                     description: Some(
-                                        "The last 8 bytes of the sender's canonical address"
-                                            .to_string(),
+                                        "The last 8 bytes of the owner's canonical address".to_string(),
                                     ),
                                 },
                                 FlatDescriptor {
                                     r#type: "uint8".to_string(),
-                                    label: "flags".to_string(),
+                                    label: "checksum".to_string(),
                                     description: Some(
-                                        "Bit field of [0]: sender is owner; [1]: contains memo".to_string(),
+                                        "CRC-8/OPENSAFETY checksum of ownerFullAdr".to_string(),
                                     ),
                                 },
                             ],
@@ -1046,9 +1045,16 @@ fn query_channel_info(
                             members: vec![
                                 FlatDescriptor {
                                     r#type: "uint64".to_string(),
-                                    label: "amount".to_string(),
+                                    label: "flagsAndAmount".to_string(),
                                     description: Some(
-                                        "The transfer amount in base denomination".to_string(),
+                                        "Bit field of [0]: non-empty memo; [1..] uint63 transfer amount in base denomination".to_string(),
+                                    ),
+                                },
+                                FlatDescriptor {
+                                    r#type: "bytes8".to_string(),
+                                    label: "recipientId".to_string(),
+                                    description: Some(
+                                        "The last 8 bytes of the recipient's canonical address".to_string(),
                                     ),
                                 },
                                 FlatDescriptor {
@@ -1056,14 +1062,6 @@ fn query_channel_info(
                                     label: "balance".to_string(),
                                     description: Some(
                                         "Spender's new balance after the transfer".to_string(),
-                                    ),
-                                },
-                                FlatDescriptor {
-                                    r#type: "bytes8".to_string(),
-                                    label: "recipient".to_string(),
-                                    description: Some(
-                                        "The last 8 bytes of the recipient's canonical address"
-                                            .to_string(),
                                     ),
                                 },
                             ],
@@ -1691,13 +1689,16 @@ fn try_transfer_impl(
     let raw_owner = deps.api.addr_canonicalize(owner.as_str())?;
     let raw_recipient = deps.api.addr_canonicalize(recipient.as_str())?;
 
+    // memo length
+    let memo_len = memo.as_ref().map(|s| s.len()).unwrap_or_default();
+
     // create the tokens received notification for recipient
     let received_notification = Notification::new(
         recipient.clone(),
         RecvdNotificationData {
             amount: amount.u128(),
             sender: Some(owner.clone()),
-            memo_len: memo.as_ref().map(|s| s.len()).unwrap_or_default(),
+            memo_len: memo_len,
             sender_is_owner: true,
         }
     );
@@ -1711,7 +1712,7 @@ fn try_transfer_impl(
         &raw_owner,
         amount.u128(),
         denom,
-        memo,
+        memo.clone(),
         block,
         #[cfg(feature = "gas_tracking")]
         tracker,
@@ -1726,6 +1727,7 @@ fn try_transfer_impl(
             actions: 1,
             recipient: Some(recipient.clone()),
             balance: owner_balance,
+            memo_len: memo_len,
         }
     );
 
@@ -1861,6 +1863,8 @@ fn try_batch_transfer(
 
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
+    let mut total_memo_len = 0;
+
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
@@ -1872,6 +1876,8 @@ fn try_batch_transfer(
         if recipient == env.contract.address {
             return Err(StdError::generic_err(SEND_TO_SSCRT_CONTRACT_MSG));
         }
+
+        total_memo_len += action.memo.as_ref().map(|s| s.len()).unwrap_or_default();
 
         let (
             received_notification,
@@ -1922,6 +1928,7 @@ fn try_batch_transfer(
             actions: num_actions as u32,
             recipient: spent_notifications[0].data.recipient.clone(),
             balance: spent_notifications.last().unwrap().data.balance,
+            memo_len: total_memo_len,
         }
     )
     .to_txhash_notification(deps.api, &env, secret, None)?;
@@ -2124,6 +2131,8 @@ fn try_batch_send(
 
     let symbol = CONFIG.load(deps.storage)?.symbol;
 
+    let mut total_memo_len = 0;
+
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
@@ -2134,6 +2143,8 @@ fn try_batch_send(
         if recipient == env.contract.address {
             return Err(StdError::generic_err(SEND_TO_SSCRT_CONTRACT_MSG));
         }
+
+        total_memo_len += action.memo.as_ref().map(|s| s.len()).unwrap_or_default();
 
         let (received_notification, spent_notification) = try_send_impl(
             &mut deps,
@@ -2150,6 +2161,7 @@ fn try_batch_send(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
         )?;
+
         notifications.push((received_notification, spent_notification));
     }
 
@@ -2163,6 +2175,7 @@ fn try_batch_send(
         Vec<Notification<RecvdNotificationData>>,
         Vec<Notification<SpentNotificationData>>,
     ) = notifications.into_iter().unzip();
+
     let received_data = multi_recvd_data(
         deps.api,
         received_notifications,
@@ -2182,6 +2195,7 @@ fn try_batch_send(
             actions: num_actions as u32,
             recipient: spent_notifications[0].data.recipient.clone(),
             balance: spent_notifications.last().unwrap().data.balance,
+            memo_len: total_memo_len,
         }
     )
     .to_txhash_notification(deps.api, &env, secret, None)?;
@@ -2274,13 +2288,15 @@ fn try_transfer_from_impl(
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
+    let memo_len = memo.as_ref().map(|s| s.len()).unwrap_or_default();
+
     // create tokens received notification for recipient
     let received_notification = Notification::new(
         recipient.clone(),
         RecvdNotificationData {
             amount: amount.u128(),
             sender: Some(owner.clone()),
-            memo_len: memo.as_ref().map(|s| s.len()).unwrap_or_default(),
+            memo_len: memo_len,
             sender_is_owner: spender == owner,
         }
     );
@@ -2309,6 +2325,7 @@ fn try_transfer_from_impl(
             actions: 1,
             recipient: Some(recipient.clone()),
             balance: owner_balance,
+            memo_len: memo_len,
         }
     );
 
@@ -2665,6 +2682,8 @@ fn try_burn_from(
     use_allowance(deps.storage, env, &owner, &info.sender, raw_amount)?;
     let raw_burner = deps.api.addr_canonicalize(info.sender.as_str())?;
 
+    let memo_len = memo.as_ref().map(|s| s.len()).unwrap_or_default();
+
     // store the event
     let tx_id = store_burn_action(
         deps.storage,
@@ -2732,6 +2751,7 @@ fn try_burn_from(
             actions: 1,
             recipient: None,
             balance: owner_balance,
+            memo_len: memo_len,
         }
     )
     .to_txhash_notification(deps.api, &env, secret, None)?;
@@ -2838,6 +2858,7 @@ fn try_batch_burn_from(
                 actions: 1,
                 recipient: None,
                 balance: owner_balance,
+                memo_len: action.memo.as_ref().map(|s| s.len()).unwrap_or_default()
             }
         ));
     }
@@ -2849,6 +2870,7 @@ fn try_batch_burn_from(
         .clone()
         .ok_or(StdError::generic_err("no tx hash found"))?
         .hash.to_ascii_uppercase();
+
     let spent_data = multi_spent_data(
         deps.api,
         spent_notifications,
@@ -3082,6 +3104,8 @@ fn try_burn(
     let raw_amount = amount.u128();
     let raw_burn_address = deps.api.addr_canonicalize(info.sender.as_str())?;
 
+    let memo_len = memo.as_ref().map(|s| s.len()).unwrap_or_default();
+
     let tx_id = store_burn_action(
         deps.storage,
         raw_burn_address.clone(),
@@ -3130,6 +3154,7 @@ fn try_burn(
             actions: 1,
             recipient: None,
             balance: owner_balance,
+            memo_len: memo_len,
         }
     )
     .to_txhash_notification(deps.api, &env, secret, None)?;
