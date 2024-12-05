@@ -4,9 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{batch, legacy_state, legacy_viewing_key, transaction_history::Tx};
-use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Uint64,};
-#[cfg(feature = "gas_evaporation")]
-use cosmwasm_std::Uint64;
+use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Uint64};
 use secret_toolkit::{notification::ChannelInfoData, permit::Permit};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -460,12 +458,13 @@ impl Evaporator for ExecuteMsg {
             | ExecuteMsg::AddSupportedDenoms { gas_target, .. }
             | ExecuteMsg::RemoveSupportedDenoms { gas_target, .. }
             | ExecuteMsg::MigrateLegacyAccount { gas_target, .. }
+            | ExecuteMsg::SetNotificationStatus { gas_target, .. }
             | ExecuteMsg::RevokePermit { gas_target, .. } => match gas_target {
                 Some(gas_target) => {
                     let gas_used = api.check_gas()?;
                     if gas_used < gas_target.u64() {
                         let evaporate_amount = gas_target.u64() - gas_used;
-                        // api.gas_evaporate(evaporate_amount as u32)?;
+                        api.gas_evaporate(evaporate_amount as u32)?;
                         return Ok(evaporate_amount)
                     }
                     Ok(0)
