@@ -345,6 +345,11 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
 
     let padded_result = pad_handle_result(response, RESPONSE_BLOCK_SIZE);
 
+    // let api = deps.api;
+    // let response = response.map(|response| {
+    //     response.add_attribute_plaintext("check_gas", format!("{}", api.check_gas().unwrap_or_default()))
+    // });
+
     #[cfg(feature = "gas_evaporation")]
     let evaporated = msg.evaporate_to_target(api)?;
 
