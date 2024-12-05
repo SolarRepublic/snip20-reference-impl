@@ -9,20 +9,11 @@ use serde::{Deserialize, Serialize};
 
 const ZERO_ADDR: [u8; 20] = [0u8; 20];
 
-// maximum value that can be stored in 56 bits (7 bytes)
-const U56_MAX: u128 = (1 << 56) - 1;
-
 // maximum value that can be stored in 62 bits
 const U62_MAX: u128 = (1 << 62) - 1;
 
 // maximum value that can be stored in 63 bits
 const U63_MAX: u128 = (1 << 63) - 1;
-
-// // CRC-6/G-704
-// const CRC_6_G_704: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_6_G_704);
-
-// CRC-8/OPENSAFETY
-const CRC_8_OPENSAFETY: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_OPENSAFETY);
 
 
 const CBL_ARRAY: usize = 1;
@@ -238,9 +229,6 @@ impl MultiRecipNotificationData for RecvdNotificationData {
         // packet owner address terminal 8 bytes (8 bytes)
         packet_plaintext[8..16].copy_from_slice(&owner_bytes[12..]);
 
-        // // CRC-8 checksum (1 byte)
-        // packet_plaintext[16] = CRC_8_OPENSAFETY.checksum(owner_bytes);
-
         // 17 bytes total
         Ok(packet_plaintext.to_vec())
     }
@@ -272,9 +260,6 @@ impl MultiRecipNotificationData for SpentNotificationData {
 
         // packet recipient address terminal 8 bytes (8 bytes)
         packet_plaintext[8..16].copy_from_slice(&recipient_bytes[12..]);
-
-        // // packet CRC-8 checksum of recipientFullAddr (1 byte)
-        // packet_plaintext[15] = CRC_8_OPENSAFETY.checksum(recipient_bytes);
 
         // balance bytes (u64 == 8 bytes)
         packet_plaintext[16..24].copy_from_slice(

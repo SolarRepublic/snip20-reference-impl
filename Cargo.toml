@@ -51,7 +51,6 @@ constant_time_eq = "0.3.0"
 primitive-types = { version = "0.13.1", default-features = false }
 minicbor = "0.25.1"
 hex = "0.4.3"
-crc = "3.2.1"
 
 # from sscrt 
 bincode2 = "2.0.1"
