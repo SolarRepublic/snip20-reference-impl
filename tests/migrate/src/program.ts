@@ -211,7 +211,7 @@ const H_FUNCTIONS = {
 		bank(k_sender, g_args.amount);
 	}),
 
-	transfer: handler('amount: token, recipient: account', (k_sender, g_args) => {
+	transfer: handler('amount: token, recipient: account', (k_sender, g_args, _, [,,g_meta]) => {
 		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
 	}),
 
@@ -288,6 +288,25 @@ const H_FUNCTIONS = {
 	migrateLegacyAccount: handler('padding: string', (k_sender, g_args) => {
 		k_sender.migrate(true);
 	}),
+};
+
+
+const G_GAS_USED: {
+	[si_key in keyof typeof H_FUNCTIONS]: (WeakUintStr | undefined)[];
+} = {
+	transfer: [],
+	send: [],
+	transferFrom: [],
+	sendFrom: [],
+	setViewingKey: [],
+	createViewingKey: [],
+	increaseAllowance: [],
+	decreaseAllowance: [],
+	burn: [],
+	burnFrom: [],
+	migrateLegacyAccount: [],
+	deposit: [],
+	redeem: [],
 };
 
 // evaluates the given program on the given contract
@@ -705,6 +724,22 @@ async function validate_state(b_premigrate=false) {
 	// validate contract state
 	await validate_state(true);
 
+	// // collect gas usage baseline
+	// const k_app_original = SecretApp(k_wallet_a, k_snip_original);
+
+	// // collect gas used baselines
+	// let xg_used_xfer = 0n;
+	// {
+	// 	// transfer
+	// 	const [, xc_code,, g_meta] = await k_app_original.exec('transfer', {
+	// 		recipient: k_wallet_b.addr,
+	// 		amount: '1' as CwUint128,
+	// 	}, 60_000n);
+
+	// 	if(xc_code) throw Error(`Gas used baseline transfer failed`);
+	// 	xg_used_xfer = BigInt(g_meta?.gas_used ?? '0');
+	// }
+
 	// run migration
 	console.debug(`Running migration...`);
 	await migrate_contract(k_snip_original.addr, k_wallet_a, sg_code_id, k_wasm, sb16_codehash, {
@@ -826,6 +861,125 @@ async function validate_state(b_premigrate=false) {
 	for(const k_eoa of a_eoas) {
 		k_eoa.unsubscribe();
 	}
+
+	// const gas = async(s_label: string, f_exec: (sg_target: WeakUintStr) => ReturnType<SecretApp['exec']>, a_targets: WeakUintStr[]) => {
+	// 	let i_test = 1;
+
+	// 	for(const sg_target of a_targets) {
+	// 		const [, xc_code,, g_meta, h_events] = await f_exec(sg_target);
+
+	// 		if(xc_code) throw Error(`Gas used comparison test failed`);
+
+	// 		const xg_used = BigInt(g_meta?.gas_used ?? '0');
+
+	// 		const xg_delta = xg_used - BigInt(sg_target);
+
+	// 		let s_overage = '';
+	// 		if('0' !== sg_target) {
+	// 			s_overage = `(${xg_delta > 0? `overshot by ${xg_delta} gas`: `${xg_delta} gas UNDER target`})`;
+	// 		}
+
+	// 		const sg_check = h_events?.['wasm.check_gas'][0];
+
+	// 		console.log(`Gas used for ${s_label} #${i_test++} w/ evaporation @${sg_target.endsWith('000')? sg_target.replace(/000$/, 'k'): sg_target}: ${xg_used} / ${sg_check} ${s_overage}`);
+	// 	}
+	// }
+
+	// // transfer
+	// await gas('transfer', (sg_target) => k_app_migrated.exec('transfer', {
+	// 	recipient: k_wallet_b.addr,
+	// 	amount: '1' as CwUint128,
+	// 	gas_target: sg_target,
+	// }, 160_000n), [
+	// 	'0',
+	// 	'76000',
+	// 	'77000',
+	// 	'100000',
+	// ]);
+
+	// // transfer
+	// await gas('transferFrom', (sg_target) => k_app_migrated.exec('transfer_from', {
+	// 	owner: k_wallet_a.addr,
+	// 	recipient: k_wallet_b.addr,
+	// 	amount: '1' as CwUint128,
+	// 	gas_target: sg_target,
+	// }, 160_000n), [
+	// 	'0',
+	// 	'80000',
+	// 	'81000',
+	// 	'100000',
+	// ]);
+
+
+	// // transfer
+	// await gas('batchTransferFrom(1)', (sg_target) => k_app_migrated.exec('batch_transfer_from', {
+	// 	actions: [
+	// 		{
+	// 			owner: k_wallet_a.addr,
+	// 			recipient: k_wallet_b.addr,
+	// 			amount: '1' as CwUint128,
+	// 		},
+	// 	],
+	// 	gas_target: sg_target,
+	// }, 160_000n), [
+	// 	'0',
+	// 	'80000',
+	// 	'81000',
+	// 	'100000',
+	// 	'120000',
+	// ]);
+
+	// // transfer
+	// await gas('batchTransferFrom(2)', (sg_target) => k_app_migrated.exec('batch_transfer_from', {
+	// 	actions: [
+	// 		{
+	// 			owner: k_wallet_a.addr,
+	// 			recipient: k_wallet_b.addr,
+	// 			amount: '1' as CwUint128,
+	// 		},
+	// 		{
+	// 			owner: k_wallet_a.addr,
+	// 			recipient: k_wallet_b.addr,
+	// 			amount: '1' as CwUint128,
+	// 		},
+	// 	],
+	// 	gas_target: sg_target,
+	// }, 160_000n), [
+	// 	'0',
+	// 	'94000',
+	// 	'95000',
+	// 	'96000',
+	// 	'100000',
+	// 	'120000',
+	// ]);
+
+	// // transfer
+	// await gas('batchTransferFrom(3)', (sg_target) => k_app_migrated.exec('batch_transfer_from', {
+	// 	actions: [
+	// 		{
+	// 			owner: k_wallet_a.addr,
+	// 			recipient: k_wallet_b.addr,
+	// 			amount: '1' as CwUint128,
+	// 		},
+	// 		{
+	// 			owner: k_wallet_a.addr,
+	// 			recipient: k_wallet_b.addr,
+	// 			amount: '1' as CwUint128,
+	// 		},
+	// 		{
+	// 			owner: k_wallet_a.addr,
+	// 			recipient: k_wallet_b.addr,
+	// 			amount: '1' as CwUint128,
+	// 		},
+	// 	],
+	// 	gas_target: sg_target,
+	// }, 200_000n), [
+	// 	'0',
+	// 	'107000',
+	// 	'108000',
+	// 	'109000',
+	// 	'120000',
+	// ]);
 
 	// done
 	console.log(`🏁 Finished integrated tests`);
