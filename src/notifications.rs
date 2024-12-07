@@ -28,8 +28,8 @@ pub struct RecvdNotification {
 }
 
 impl DirectChannel for RecvdNotification {
-	const CHANNEL_ID: &'static str = "recvd";
-	const CDDL_SCHEMA: &'static str = "recvd=[amount:biguint .size 8,sender:bstr .size 20,memo_len:uint .size 1]";
+    const CHANNEL_ID: &'static str = "recvd";
+    const CDDL_SCHEMA: &'static str = "recvd=[amount:biguint .size 8,sender:bstr .size 20,memo_len:uint .size 1]";
     const ELEMENTS: u64 = 3;
     const PAYLOAD_SIZE: usize = CBL_ARRAY_SHORT + CBL_BIGNUM_U64 + CBL_ADDRESS + CBL_U8;
 
@@ -73,7 +73,7 @@ pub struct SpentNotification {
 
 impl DirectChannel for SpentNotification {
     const CHANNEL_ID: &'static str = "spent";
-	const CDDL_SCHEMA: &'static str = "spent=[amount:biguint .size 8,actions:uint .size 1,recipient:bstr .size 20,balance:biguint .size 8]";
+    const CDDL_SCHEMA: &'static str = "spent=[amount:biguint .size 8,actions:uint .size 1,recipient:bstr .size 20,balance:biguint .size 8]";
     const ELEMENTS: u64 = 4;
     const PAYLOAD_SIZE: usize = CBL_ARRAY_SHORT + CBL_BIGNUM_U64 + CBL_U8 + CBL_ADDRESS + CBL_BIGNUM_U64;
 
@@ -136,7 +136,7 @@ impl DirectChannel for AllowanceNotification {
 pub struct MultiRecvdNotification(pub Vec<Notification<RecvdNotification>>);
 
 impl GroupChannel<RecvdNotification> for MultiRecvdNotification {
-	const CHANNEL_ID: &'static str = "multirecvd";
+    const CHANNEL_ID: &'static str = "multirecvd";
 
     // bloom parameters for the `multirecvd` channel: <https://hur.st/bloomfilter/?n=16&p=&m=512&k=22>
     const BLOOM_N: usize = 16;
