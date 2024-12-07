@@ -38,9 +38,9 @@ cosmwasm-std = { package = "secret-cosmwasm-std", version = "1.1.11"  }
 cosmwasm-storage = { package = "secret-cosmwasm-storage", version = "1.1.11"  }
 rand = { version = "0.8.5", default-features = false }
 # secret-toolkit = { version = "0.10.0", default-features = false, features = ["permit", "storage", "viewing-key", "notification"] }
-secret-toolkit = { git = "https://github.com/SolarRepublic/secret-toolkit.git", default-features = false, features = ["permit", "storage", "viewing-key", "notification"], rev = "0b5335e5c754bc09bc60eec59468bed76fed94d7" }
+secret-toolkit = { git = "https://github.com/SolarRepublic/secret-toolkit.git", default-features = false, features = ["permit", "storage", "viewing-key", "notification"], rev = "69eb5a00fca5f534d3210050fe4d3b3cbe681cb8" }
 # secret-toolkit-crypto = { version = "0.10.0", default-features = false, features = ["hash", "hkdf", "rand"] }
-secret-toolkit-crypto = { git = "https://github.com/SolarRepublic/secret-toolkit.git", default-features = false, features = ["hash", "hkdf", "rand"], rev = "0b5335e5c754bc09bc60eec59468bed76fed94d7" }
+secret-toolkit-crypto = { git = "https://github.com/SolarRepublic/secret-toolkit.git", default-features = false, features = ["hash", "hkdf", "rand"], rev = "69eb5a00fca5f534d3210050fe4d3b3cbe681cb8" }
 static_assertions = "1.1.0"
 
 schemars = "0.8.12"

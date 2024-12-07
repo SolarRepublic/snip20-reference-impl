@@ -153,8 +153,8 @@ impl GroupChannel<RecvdNotification> for MultiRecvdNotification {
     // flagsAndAmount:8 + ownerId:8 == 16 bytes
     const PACKET_SIZE: usize = 16;
 
-    fn notifications(&self) -> Vec<Notification<RecvdNotification>> {
-        self.0.clone()
+    fn notifications(&self) -> &Vec<Notification<RecvdNotification>> {
+        &self.0
     }
 
     fn build_packet(&self, api: &dyn Api, data: &RecvdNotification) -> StdResult<Vec<u8>> {
@@ -215,8 +215,8 @@ impl GroupChannel<SpentNotification> for MultiSpentNotification {
     // flagsAndAmount:8 + recipientId:8 + balance:8 == 24 bytes
     const PACKET_SIZE: usize = 24;
 
-    fn notifications(&self) -> Vec<Notification<SpentNotification>> {
-        self.0.clone()
+    fn notifications(&self) -> &Vec<Notification<SpentNotification>> {
+        &self.0
     }
 
     fn build_packet(&self, api: &dyn Api, data: &SpentNotification) -> StdResult<Vec<u8>> {
@@ -338,7 +338,7 @@ pub fn render_group_notification<D: DirectChannel, G: GroupChannel<D>>(
     let mut recipient_counts: HashMap<CanonicalAddr, u16> = HashMap::new();
 
     // each notification
-    for notification in &group.notifications() {
+    for notification in group.notifications() {
         // who notification is intended for
         let notification_for = api.addr_canonicalize(notification.notification_for.as_str())?;
         let notifyee = notification_for.clone();
