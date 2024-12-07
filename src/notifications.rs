@@ -27,6 +27,13 @@ pub struct RecvdNotification {
     pub sender_is_owner: bool,
 }
 
+/// ```cddl
+///  recvd = [
+///     amount: biguint .size 8,  ; transfer amount in base denomination
+///     sender: bstr .size 20,    ; number of actions the execution performed
+///     memo_len: uint .size 1,   ; byte sequence of first recipient's canonical address
+/// ]
+/// ```
 impl DirectChannel for RecvdNotification {
     const CHANNEL_ID: &'static str = "recvd";
     const CDDL_SCHEMA: &'static str = "recvd=[amount:biguint .size 8,sender:bstr .size 20,memo_len:uint .size 1]";
@@ -54,10 +61,10 @@ impl DirectChannel for RecvdNotification {
 
 /// ```cddl
 ///  spent = [
-///     amount: biguint,   ; transfer amount in base denomination
-///     actions: uint      ; number of actions the execution performed
-///     recipient: bstr,   ; byte sequence of first recipient's canonical address
-///     balance: biguint   ; sender's new balance aactions
+///     amount: biguint .size 8,   ; transfer amount in base denomination
+///     actions: uint .size 1,     ; number of actions the execution performed
+///     recipient: bstr .size 20,  ; byte sequence of first recipient's canonical address
+///     balance: biguint .size 8,  ; sender's new balance aactions
 /// ]
 /// ```
 #[derive(Serialize, Debug, Deserialize, Clone)]
@@ -101,9 +108,9 @@ impl DirectChannel for SpentNotification {
 
 ///```cddl
 /// allowance = [
-///    amount: biguint,   ; allowance amount in base denomination
-///    allower: bstr,     ; byte sequence of allower's canonical address
-///    expiration: uint,  ; epoch seconds of allowance expiration
+///    amount: biguint .size 8,   ; allowance amount in base denomination
+///    allower: bstr .size 20,    ; byte sequence of allower's canonical address
+///    expiration: uint .size 8,  ; epoch seconds of allowance expiration
 ///]
 /// ```
 #[derive(Serialize, Debug, Deserialize, Clone)]
