@@ -862,53 +862,69 @@ async function validate_state(b_premigrate=false) {
 		k_eoa.unsubscribe();
 	}
 
-	// const gas = async(s_label: string, f_exec: (sg_target: WeakUintStr) => ReturnType<SecretApp['exec']>, a_targets: WeakUintStr[]) => {
-	// 	let i_test = 1;
+	const gas = async(s_label: string, f_exec: (sg_target: WeakUintStr) => ReturnType<SecretApp['exec']>, a_targets: WeakUintStr[]) => {
+		let i_test = 1;
 
-	// 	for(const sg_target of a_targets) {
-	// 		const [, xc_code,, g_meta, h_events] = await f_exec(sg_target);
+		for(const sg_target of a_targets) {
+			const [, xc_code,, g_meta, h_events] = await f_exec(sg_target);
 
-	// 		if(xc_code) throw Error(`Gas used comparison test failed`);
+			if(xc_code) throw Error(`Gas used comparison test failed`);
 
-	// 		const xg_used = BigInt(g_meta?.gas_used ?? '0');
+			const xg_used = BigInt(g_meta?.gas_used ?? '0');
 
-	// 		const xg_delta = xg_used - BigInt(sg_target);
+			const xg_delta = xg_used - BigInt(sg_target);
 
-	// 		let s_overage = '';
-	// 		if('0' !== sg_target) {
-	// 			s_overage = `(${xg_delta > 0? `overshot by ${xg_delta} gas`: `${xg_delta} gas UNDER target`})`;
-	// 		}
+			let s_overage = '';
+			if('0' !== sg_target) {
+				s_overage = `(${xg_delta > 0? `overshot by ${xg_delta} gas`: `${xg_delta} gas UNDER target`})`;
+			}
 
-	// 		const sg_check = h_events?.['wasm.check_gas'][0];
+			const sg_check = h_events?.['wasm.check_gas']?.[0] ?? '';
 
-	// 		console.log(`Gas used for ${s_label} #${i_test++} w/ evaporation @${sg_target.endsWith('000')? sg_target.replace(/000$/, 'k'): sg_target}: ${xg_used} / ${sg_check} ${s_overage}`);
-	// 	}
-	// }
+			if(h_events?.['wasm.verify_gas_change']?.[0]) {
+				debugger;
+			}
 
-	// // transfer
-	// await gas('transfer', (sg_target) => k_app_migrated.exec('transfer', {
-	// 	recipient: k_wallet_b.addr,
-	// 	amount: '1' as CwUint128,
-	// 	gas_target: sg_target,
-	// }, 160_000n), [
-	// 	'0',
-	// 	'76000',
-	// 	'77000',
-	// 	'100000',
-	// ]);
+			console.log(`Gas used for ${s_label} #${i_test++} w/ evaporation @${sg_target.endsWith('000')? sg_target.replace(/000$/, 'k'): sg_target}: ${xg_used} / ${sg_check} ${s_overage}`);
+		}
+	}
 
-	// // transfer
-	// await gas('transferFrom', (sg_target) => k_app_migrated.exec('transfer_from', {
-	// 	owner: k_wallet_a.addr,
-	// 	recipient: k_wallet_b.addr,
-	// 	amount: '1' as CwUint128,
-	// 	gas_target: sg_target,
-	// }, 160_000n), [
-	// 	'0',
-	// 	'80000',
-	// 	'81000',
-	// 	'100000',
-	// ]);
+	// transfer
+	await gas('transfer', (sg_target) => k_app_migrated.exec('transfer', {
+		recipient: k_wallet_b.addr,
+		amount: '1' as CwUint128,
+		// gas_target: sg_target,
+	}, 160_000n), [
+		'0',
+		'76000',
+		'77000',
+		'100000',
+	]);
+
+	// transfer
+	await gas('transfer', (sg_target) => k_app_migrated.exec('transfer', {
+		recipient: k_wallet_c.addr,
+		amount: '100' as CwUint128,
+		// gas_target: sg_target,
+	}, 160_000n), [
+		'0',
+		'76000',
+		'77000',
+		'100000',
+	]);
+
+	// transfer
+	await gas('transferFrom', (sg_target) => k_app_migrated.exec('transfer_from', {
+		owner: k_wallet_a.addr,
+		recipient: k_wallet_b.addr,
+		amount: '1' as CwUint128,
+		// gas_target: sg_target,
+	}, 160_000n), [
+		'0',
+		'80000',
+		'81000',
+		'100000',
+	]);
 
 
 	// // transfer
@@ -983,5 +999,6 @@ async function validate_state(b_premigrate=false) {
 
 	// done
 	console.log(`🏁 Finished integrated tests`);
+	process.exit(0);
 }
 
