@@ -43,6 +43,8 @@ secret-toolkit-crypto = { version = "0.10.2", default-features = false, features
 # secret-toolkit-crypto = { git = "https://github.com/SolarRepublic/secret-toolkit.git", default-features = false, features = ["hash", "hkdf", "rand"], rev = "69eb5a00fca5f534d3210050fe4d3b3cbe681cb8" }
 static_assertions = "1.1.0"
 
+rand_core = { version = "0.6.4", default-features = false }
+rand_chacha = { version = "0.3.1", default-features = false }
 schemars = "0.8.12"
 serde = { version = "1.0.158", default-features = false, features = ["derive"] }
 serde-big-array = "0.5.1"
