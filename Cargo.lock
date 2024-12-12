@@ -89,9 +89,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "cc"
-version = "1.0.99"
+version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96c51067fd44124faa7f870b4b1c969379ad32b2ba805aa959430ceaa384f695"
+checksum = "e9e8aabfac534be767c909e0690571677d49f41bd8465ae876fe043d52ba5292"
 
 [[package]]
 name = "cfg-if"
@@ -701,8 +701,9 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit"
-version = "0.10.0"
-source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=69eb5a00fca5f534d3210050fe4d3b3cbe681cb8#69eb5a00fca5f534d3210050fe4d3b3cbe681cb8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c4dcbfc5ef7c201479020f54a9dab1fe11cb64cd3c4d875a91dd491b265ed01"
 dependencies = [
  "secret-toolkit-crypto",
  "secret-toolkit-notification",
@@ -715,9 +716,11 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit-crypto"
-version = "0.10.0"
-source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=69eb5a00fca5f534d3210050fe4d3b3cbe681cb8#69eb5a00fca5f534d3210050fe4d3b3cbe681cb8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cead50c5e6bd178f8f1e7f7b6d3a14e86177d42b24f91a85543f1e1ae12a873"
 dependencies = [
+ "cc",
  "hkdf",
  "rand_chacha",
  "rand_core 0.6.4",
@@ -728,8 +731,9 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit-notification"
-version = "0.10.0"
-source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=69eb5a00fca5f534d3210050fe4d3b3cbe681cb8#69eb5a00fca5f534d3210050fe4d3b3cbe681cb8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4291e682d1f082e32a087b704d01ed4ec6ad3b016fae1f4d3b0b2312df766d1d"
 dependencies = [
  "chacha20poly1305",
  "generic-array",
@@ -747,8 +751,9 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit-permit"
-version = "0.10.0"
-source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=69eb5a00fca5f534d3210050fe4d3b3cbe681cb8#69eb5a00fca5f534d3210050fe4d3b3cbe681cb8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca321f0c41ac6479f8988c88e1ace9aee2d566a8889f6b7cf45f60e741285cd6"
 dependencies = [
  "bech32",
  "remain",
@@ -761,8 +766,9 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit-serialization"
-version = "0.10.0"
-source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=69eb5a00fca5f534d3210050fe4d3b3cbe681cb8#69eb5a00fca5f534d3210050fe4d3b3cbe681cb8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cd631b147752674789691135f536965f9118a1a69a9c6522064b71c777b8fa7"
 dependencies = [
  "bincode2",
  "schemars",
@@ -772,8 +778,9 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit-storage"
-version = "0.10.0"
-source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=69eb5a00fca5f534d3210050fe4d3b3cbe681cb8#69eb5a00fca5f534d3210050fe4d3b3cbe681cb8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b1a38dc584baa4f2c9aa52844fd3d06258bdae22fcd8cbe635ffab480ba53a0"
 dependencies = [
  "secret-cosmwasm-std",
  "secret-cosmwasm-storage",
@@ -783,8 +790,9 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit-utils"
-version = "0.10.0"
-source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=69eb5a00fca5f534d3210050fe4d3b3cbe681cb8#69eb5a00fca5f534d3210050fe4d3b3cbe681cb8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee464d607765ab148164b154eba2ee649bf77f2855c5c2691342f426c263704f"
 dependencies = [
  "schemars",
  "secret-cosmwasm-std",
@@ -794,8 +802,9 @@ dependencies = [
 
 [[package]]
 name = "secret-toolkit-viewing-key"
-version = "0.10.0"
-source = "git+https://github.com/SolarRepublic/secret-toolkit.git?rev=69eb5a00fca5f534d3210050fe4d3b3cbe681cb8#69eb5a00fca5f534d3210050fe4d3b3cbe681cb8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "350ab608f01fe4b61b74ccf205b251513edffe06fc432f7ecc4c762027b2bf5d"
 dependencies = [
  "base64 0.21.7",
  "schemars",

@@ -49,7 +49,11 @@ pub const NOTIFICATION_BLOCK_SIZE: usize = 1;
 pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
 
 #[entry_point]
-pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> StdResult<Response> {
+pub fn migrate(
+    deps: DepsMut,
+    env: Env,
+    msg: MigrateMsg
+) -> StdResult<Response> {
     // migrate old data
 
     // :: minters
@@ -138,6 +142,9 @@ pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> StdResult<Response> 
         32,
     )?;
     VKSEED.save(deps.storage, &vk_seed)?;
+
+    #[cfg(feature = "gas_tracking")]
+    let mut tracker: GasTracker = GasTracker::new(deps.api);
 
     if msg.refund_transfers_to_contract {
         let contract_canonical = deps.api.addr_canonicalize(env.contract.address.as_str())?;
@@ -869,27 +876,21 @@ pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
     // call, for compatibility with non-Secret addresses.
     let account = Addr::unchecked(account);
     let account = deps.api.addr_canonicalize(account.as_str())?;
-
-    // :: added for sscrt migration
-    let amount = stored_balance(deps.storage, &account)?;
-    let mut balance;
     
     let dwb = DWB.load(deps.storage)?;
     let dwb_index = dwb.recipient_match(&account);
 
-    if amount.is_none() && dwb_index == 0 {
-        // no record of balance in dwb or btbe
-        balance = legacy_state::get_old_balance(deps.storage, &account).unwrap_or_default();
-    } else {
-        balance = amount.unwrap_or_default();
-        if dwb_index > 0 {
-            balance = balance.saturating_add(dwb.entries[dwb_index].amount()? as u128);
-        }
-    }
-    // :: migration end
+    // get stored balance from new or legacy
+    let mut balance = stored_balance(deps.storage, &account)?
+        .unwrap_or_else(|| legacy_state::get_old_balance(deps.storage, &account).unwrap_or_default());
 
-    let amount = Uint128::new(balance);
-    let response = QueryAnswer::Balance { amount };
+    // dwb entry exists; include its amount in total balance
+    if dwb_index > 0 {
+        balance = balance.saturating_add(dwb.entries[dwb_index].amount()? as u128);
+    }
+
+    // build response
+    let response = QueryAnswer::Balance { amount: Uint128::new(balance) };
     to_binary(&response)
 }
 
