@@ -4,7 +4,6 @@ include!(concat!(env!("OUT_DIR"), "/config.rs"));
 
 use constant_time_eq::constant_time_eq;
 use cosmwasm_std::{BlockInfo, CanonicalAddr, StdError, StdResult, Storage, Timestamp};
-use primitive_types::U256;
 use secret_toolkit::{
     serialization::{Bincode2, Serde},
     storage::Item,
@@ -13,7 +12,7 @@ use secret_toolkit_crypto::hkdf_sha_256;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::{dwb::{constant_time_if_else, constant_time_if_else_u32, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
+use crate::{constants::{ADDRESS_BYTES_LEN, IMPOSSIBLE_ADDR}, dwb::{constant_time_if_else, constant_time_if_else_u32, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
 use crate::dwb::{amount_u64, DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
@@ -29,32 +28,18 @@ const BUCKETING_SALT_BYTES: &[u8; 14] = b"bucketing-salt";
 const U32_BYTES: usize = 4;
 const U128_BYTES: usize = 16;
 
-#[cfg(test)]
-const BTBE_BUCKET_ADDRESS_BYTES: usize = 54;
-#[cfg(not(test))]
-const BTBE_BUCKET_ADDRESS_BYTES: usize = 20;
-const BTBE_BUCKET_BALANCE_BYTES: usize = 8; // Max 16 (u128)
+const BTBE_BUCKET_ADDRESS_BYTES: usize = ADDRESS_BYTES_LEN;
+const BTBE_BUCKET_BALANCE_BYTES: usize = 8; // Max 16 (u64)
 const BTBE_BUCKET_HISTORY_BYTES: usize = 4; // Max 4  (u32)
+const BTBE_BUCKET_CACHE_BYTES: usize = 0;
 
 const_assert!(BTBE_BUCKET_BALANCE_BYTES <= U128_BYTES);
 const_assert!(BTBE_BUCKET_HISTORY_BYTES <= U32_BYTES);
 
 const BTBE_BUCKET_ENTRY_BYTES: usize =
-    BTBE_BUCKET_ADDRESS_BYTES + BTBE_BUCKET_BALANCE_BYTES + BTBE_BUCKET_HISTORY_BYTES;
+    BTBE_BUCKET_ADDRESS_BYTES + BTBE_BUCKET_BALANCE_BYTES + BTBE_BUCKET_HISTORY_BYTES
+    + BTBE_BUCKET_CACHE_BYTES;
 
-/// canonical address bytes corresponding to the 33-byte null public key, in hexadecimal
-#[cfg(test)]
-const IMPOSSIBLE_ADDR: [u8; BTBE_BUCKET_ADDRESS_BYTES] = [
-    0x29, 0xCF, 0xC6, 0x37, 0x62, 0x55, 0xA7, 0x84, 0x51, 0xEE, 0xB4, 0xB1, 0x29, 0xED, 0x8E, 0xAC,
-    0xFF, 0xA2, 0xFE, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-#[cfg(not(test))]
-const IMPOSSIBLE_ADDR: [u8; BTBE_BUCKET_ADDRESS_BYTES] = [
-    0x29, 0xCF, 0xC6, 0x37, 0x62, 0x55, 0xA7, 0x84, 0x51, 0xEE, 0xB4, 0xB1, 0x29, 0xED, 0x8E, 0xAC,
-    0xFF, 0xA2, 0xFE, 0xEF,
-];
 
 /// A `StoredEntry` consists of the address, balance, and tx bundle history length in a byte array representation.
 /// The methods of the struct implementation also handle pushing and getting the tx bundle history in a simplified
@@ -64,7 +49,9 @@ const IMPOSSIBLE_ADDR: [u8; BTBE_BUCKET_ADDRESS_BYTES] = [
 pub struct StoredEntry(#[serde(with = "BigArray")] [u8; BTBE_BUCKET_ENTRY_BYTES]);
 
 impl StoredEntry {
-    fn new(address: &CanonicalAddr) -> StdResult<Self> {
+    fn new(
+        address: &CanonicalAddr,
+    ) -> StdResult<Self> {
         let address = address.as_slice();
 
         if address.len() != BTBE_BUCKET_ADDRESS_BYTES {
@@ -73,6 +60,7 @@ impl StoredEntry {
 
         let mut result = [0u8; BTBE_BUCKET_ENTRY_BYTES];
         result[..BTBE_BUCKET_ADDRESS_BYTES].copy_from_slice(address);
+
         Ok(Self { 0: result })
     }
 
@@ -154,6 +142,48 @@ impl StoredEntry {
         }
         self.0[start..end].copy_from_slice(val_bytes);
         Ok(())
+    }
+
+    pub fn save_hash_cache(&mut self, storage: &dyn Storage) -> StdResult<()> {
+        let hash_bytes = hkdf_sha_256(
+            &Some(BUCKETING_SALT_BYTES.to_vec()),
+            INTERNAL_SECRET.load(storage)?.as_slice(),
+            self.address_slice(),
+            32,
+        )?;
+
+        let start = BTBE_BUCKET_ADDRESS_BYTES + BTBE_BUCKET_BALANCE_BYTES + BTBE_BUCKET_HISTORY_BYTES;
+        let end = start + BTBE_BUCKET_CACHE_BYTES;
+        self.0[start..end].copy_from_slice(&hash_bytes.as_slice()[0..BTBE_BUCKET_CACHE_BYTES]);
+        Ok(())
+    }
+
+    pub fn routes_to_right_node(&self, bit_pos: usize, secret: &[u8]) -> StdResult<bool> {
+        // target byte value
+        let byte;
+
+        // bit pos is cached
+        if bit_pos < (BTBE_BUCKET_CACHE_BYTES << 3) {
+            // select the byte from cache corresponding to this bit position
+            byte = self.0[BTBE_BUCKET_ADDRESS_BYTES + BTBE_BUCKET_BALANCE_BYTES + BTBE_BUCKET_HISTORY_BYTES + (bit_pos >> 3)];
+        }
+        // not cached; calculate on the fly
+        else {
+            // create key bytes
+            let key_bytes = hkdf_sha_256(
+                &Some(BUCKETING_SALT_BYTES.to_vec()),
+                secret,
+                self.address_slice(),
+                32,
+            )?;
+
+            // select the byte containing the target bit
+            byte = key_bytes[bit_pos >> 3];
+        }
+
+        // extract value at bit position and turn into bool
+        return Ok(((byte >> (7 - (bit_pos % 8))) & 1) != 0);
+
     }
 
     pub fn merge_dwb_entry(
@@ -409,28 +439,11 @@ impl BitwiseTrieNode {
     }
 }
 
-/// Determines whether a given entry belongs in the left node (true) or right node (false)
-fn entry_belongs_in_left_node(secret: &[u8], entry: StoredEntry, bit_pos: u8) -> StdResult<bool> {
-    // create key bytes
-    let key_bytes = hkdf_sha_256(
-        &Some(BUCKETING_SALT_BYTES.to_vec()),
-        secret,
-        entry.address_slice(),
-        32,
-    )?;
-
-    // convert to u258
-    let key_u256 = U256::from_big_endian(&key_bytes);
-
-    // extract the bit value at the target bit position
-    return Ok(U256::from(0) == (key_u256 >> (255 - bit_pos)) & U256::from(1));
-}
-
 /// Locates a btbe node given an address; returns tuple of (node, node_id, bit position)
 pub fn locate_btbe_node(
     storage: &dyn Storage,
     address: &CanonicalAddr,
-) -> StdResult<(BitwiseTrieNode, u64, u8)> {
+) -> StdResult<(BitwiseTrieNode, u64, usize)> {
     // load internal contract secret
     let secret = INTERNAL_SECRET.load(storage)?;
     let secret = secret.as_slice();
@@ -448,7 +461,9 @@ pub fn locate_btbe_node(
     let mut node = BTBE_TRIE_NODES
         .add_suffix(&node_id.to_be_bytes())
         .load(storage)?;
-    let mut bit_pos: u8 = 0;
+
+    // bit position
+    let mut bit_pos: usize = 0;
 
     // while the node has children
     while node.bucket == 0 {
@@ -616,7 +631,10 @@ pub fn settle_dwb_entry(
 
         // need to insert new entry
         // create new stored balance entry
-        let btbe_entry = StoredEntry::from(storage, &dwb_entry, amount_spent)?;
+        let mut btbe_entry = StoredEntry::from(storage, &dwb_entry, amount_spent)?;
+
+        // cache the address
+        btbe_entry.save_hash_cache(storage)?;
 
         // load contract's internal secret
         let secret = INTERNAL_SECRET.load(storage)?;
@@ -648,12 +666,11 @@ pub fn settle_dwb_entry(
 
                 // each entry
                 for entry in bucket.entries {
-                    // left_bucket.add_entry(&entry);
                     // route entry
-                    if entry_belongs_in_left_node(secret, entry, bit_pos)? {
-                        left_bucket.add_entry(&entry);
-                    } else {
+                    if entry.routes_to_right_node(bit_pos, secret)? {
                         right_bucket.add_entry(&entry);
+                    } else {
+                        left_bucket.add_entry(&entry);
                     }
                 }
 
@@ -727,16 +744,16 @@ pub fn settle_dwb_entry(
                 ));
 
                 // route entry
-                if entry_belongs_in_left_node(secret, btbe_entry, bit_pos)? {
-                    node = left;
-                    node_id = left_id;
-                    bucket = left_bucket;
-                    bucket_id = left_bucket_id;
-                } else {
+                if btbe_entry.routes_to_right_node(bit_pos, secret)? {
                     node = right;
                     node_id = right_id;
                     bucket = right_bucket;
                     bucket_id = right_bucket_id;
+                } else {
+                    node = left;
+                    node_id = left_id;
+                    bucket = left_bucket;
+                    bucket_id = left_bucket_id;
                 }
 
                 // increment bit position for next iteration of the loop
@@ -849,6 +866,7 @@ mod tests {
             address: "bob".to_string(),
             amount: Uint128::new(5000),
         }]);
+
         assert!(
             init_result.is_ok(),
             "Init failed: {}",
@@ -856,11 +874,13 @@ mod tests {
         );
         let _env = mock_env();
         let _info = mock_info("bob", &[]);
+        let storage = &mut deps.storage;
 
         let canonical = deps
             .api
             .addr_canonicalize(Addr::unchecked("bob".to_string()).as_str())
             .unwrap();
+
         let entry = StoredEntry::new(&canonical).unwrap();
         assert_eq!(entry.address().unwrap(), canonical);
         assert_eq!(entry.balance().unwrap(), 0_u64);
@@ -890,10 +910,11 @@ mod tests {
         );
         let env = mock_env();
         let _info = mock_info("bob", &[]);
+        let storage = &mut deps.storage;
 
-        let _ = initialize_btbe(&mut deps.storage).unwrap();
+        let _ = initialize_btbe(storage).unwrap();
 
-        let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
+        let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(storage).unwrap();
         assert_eq!(btbe_node_count, 1);
 
         for i in 1..=128 {
@@ -901,18 +922,21 @@ mod tests {
                 .api
                 .addr_canonicalize(Addr::unchecked(format!("{i}zzzzzz")).as_str())
                 .unwrap();
-            let entry = StoredEntry::new(&canonical).unwrap();
+
+            let mut entry = StoredEntry::new(&canonical).unwrap();
+            entry.save_hash_cache(storage).unwrap();
+
             assert_eq!(entry.address().unwrap(), canonical);
             assert_eq!(entry.balance().unwrap(), 0_u64);
 
             let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-            let _result = settle_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
+            let _result = settle_dwb_entry(storage, &mut dwb_entry, None, &env.block);
 
-            let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
+            let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(storage).unwrap();
             assert_eq!(btbe_node_count, 1);
 
-            let (node, node_id, bit_pos) = locate_btbe_node(&deps.storage, &canonical).unwrap();
+            let (node, node_id, bit_pos) = locate_btbe_node(storage, &canonical).unwrap();
             assert_eq!(
                 node,
                 BitwiseTrieNode {
@@ -930,7 +954,8 @@ mod tests {
             .api
             .addr_canonicalize(Addr::unchecked(format!("bob")).as_str())
             .unwrap();
-        let entry = StoredEntry::new(&canonical).unwrap();
+        let mut entry = StoredEntry::new(&canonical).unwrap();
+        entry.save_hash_cache(storage);
         assert_eq!(entry.address().unwrap(), canonical);
         assert_eq!(entry.balance().unwrap(), 0_u64);
 

@@ -17,7 +17,7 @@ use crate::{batch, legacy_state, legacy_viewing_key};
 
 #[cfg(feature = "gas_tracking")]
 use crate::dwb::log_dwb;
-use crate::dwb::{DelayedWriteBuffer, DWB, TX_NODES};
+use crate::dwb::{DelayedWriteBuffer, DelayedWriteBufferEntry, DWB, TX_NODES};
 
 use crate::btbe::{
     find_start_bundle, initialize_btbe, settle_dwb_entry, stored_balance, stored_entry, stored_tx_count
@@ -386,12 +386,8 @@ fn migrate_legacy_account(
         return Err(StdError::generic_err("No legacy balance"));
     }
 
-    // load delayed write buffer
-    let mut dwb = DWB.load(deps.storage)?;
-
-    // release the address from the buffer
-    let (_dwb_balance, mut dwb_entry) = dwb.release_dwb_recipient(deps.storage, &sender_raw, &env.block)?;
-    dwb_entry.set_recipient(&sender_raw)?;
+    // create dummy dwb entry for account
+    let mut dwb_entry = DelayedWriteBufferEntry::new(&sender_raw)?;
     
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
@@ -404,7 +400,7 @@ fn migrate_legacy_account(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
-    )?;    
+    )?;
 
     Ok(Response::new()
         .set_data(to_binary(&ExecuteAnswer::MigrateLegacyAccount { status: Success })?)

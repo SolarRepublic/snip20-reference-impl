@@ -4,6 +4,7 @@ extern crate static_assertions as sa;
 mod batch;
 mod btbe;
 pub mod contract;
+mod constants;
 mod dwb;
 mod gas_tracker;
 pub mod msg;
