@@ -12,7 +12,7 @@ use secret_toolkit_crypto::hkdf_sha_256;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::{constants::{ADDRESS_BYTES_LEN, IMPOSSIBLE_ADDR}, dwb::{constant_time_if_else, constant_time_if_else_u32, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET}, transaction_history::{store_migration_action, TRANSACTIONS}};
+use crate::{constants::{ADDRESS_BYTES_LEN, IMPOSSIBLE_ADDR}, dwb::{constant_time_if_else, constant_time_if_else_u32, TX_NODES}, legacy_state, state::{safe_add, safe_add_u64, CONFIG, INTERNAL_SECRET_SENSITIVE}, transaction_history::{store_migration_action, TRANSACTIONS}};
 use crate::dwb::{amount_u64, DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
@@ -147,7 +147,7 @@ impl StoredEntry {
     pub fn save_hash_cache(&mut self, storage: &dyn Storage) -> StdResult<()> {
         let hash_bytes = hkdf_sha_256(
             &Some(BUCKETING_SALT_BYTES.to_vec()),
-            INTERNAL_SECRET.load(storage)?.as_slice(),
+            INTERNAL_SECRET_SENSITIVE.load(storage)?.as_slice(),
             self.address_slice(),
             32,
         )?;
@@ -445,7 +445,7 @@ pub fn locate_btbe_node(
     address: &CanonicalAddr,
 ) -> StdResult<(BitwiseTrieNode, u64, usize)> {
     // load internal contract secret
-    let secret = INTERNAL_SECRET.load(storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(storage)?;
     let secret = secret.as_slice();
 
     // create key bytes
@@ -637,7 +637,7 @@ pub fn settle_dwb_entry(
         btbe_entry.save_hash_cache(storage)?;
 
         // load contract's internal secret
-        let secret = INTERNAL_SECRET.load(storage)?;
+        let secret = INTERNAL_SECRET_SENSITIVE.load(storage)?;
         let secret = secret.as_slice();
 
         loop {

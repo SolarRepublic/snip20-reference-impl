@@ -38,7 +38,7 @@ use crate::notifications::{
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    safe_add, AllowancesStore, Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET, NOTIFICATIONS_ENABLED, TOTAL_SUPPLY
+    safe_add, AllowancesStore, Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET_RELAXED, INTERNAL_SECRET_SENSITIVE, NOTIFICATIONS_ENABLED, TOTAL_SUPPLY
 };
 use crate::strings::{SEND_TO_SSCRT_CONTRACT_MSG, TRANSFER_HISTORY_UNSUPPORTED_MSG};
 use crate::transaction_history::{
@@ -112,15 +112,23 @@ pub fn migrate(
     rng_entropy.extend_from_slice(&env.block.time.seconds().to_be_bytes());
     rng_entropy.extend_from_slice(entropy);
 
-    // Create INTERNAL_SECRET
+    // create internal secrets
     let salt = Some(sha_256(&rng_entropy).to_vec());
-    let internal_secret = hkdf_sha_256(
+    let internal_secret_sensitive = hkdf_sha_256(
         &salt,
         rng_seed.0.as_slice(),
-        "contract_internal_secret".as_bytes(),
+        "contract_internal_secret_sensitive".as_bytes(),
         32,
     )?;
-    INTERNAL_SECRET.save(deps.storage, &internal_secret)?;
+    INTERNAL_SECRET_SENSITIVE.save(deps.storage, &internal_secret_sensitive)?;
+
+    let internal_secret_relaxed = hkdf_sha_256(
+        &salt,
+        rng_seed.0.as_slice(),
+        "contract_internal_secret_relaxed".as_bytes(),
+        32,
+    )?;
+    INTERNAL_SECRET_RELAXED.save(deps.storage, &internal_secret_relaxed)?;
 
     // Hard-coded channels
     let channels: Vec<String> = vec![
@@ -846,7 +854,7 @@ pub fn query_transactions(
     }
 
     // deterministically obfuscate ids so they are not serial to prevent metadata leak
-    let internal_secret = INTERNAL_SECRET.load(deps.storage)?;
+    let internal_secret = INTERNAL_SECRET_RELAXED.load(deps.storage)?;
     let internal_secret_u64: u64 = u64::from_be_bytes(internal_secret[..8].try_into().unwrap());
     let txs = txs
         .iter()
@@ -856,7 +864,7 @@ pub fn query_transactions(
             let serial_id_rand = rng.next_u64();
             let new_seed = serial_id_rand ^ internal_secret_u64;
             let mut rng = ChaChaRng::seed_from_u64(new_seed);
-            let new_id = rng.next_u64();
+            let new_id = rng.next_u64() >> (64 - 53);
             Tx {
                 id: new_id,
                 action: tx.action.clone(),
@@ -952,7 +960,7 @@ fn query_channel_info(
     txhash: Option<String>,
     sender_raw: CanonicalAddr,
 ) -> StdResult<Binary> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
     let seed = get_seed(&sender_raw, secret)?;
     let mut channels_data = vec![];
@@ -1245,7 +1253,7 @@ fn try_mint(
     amount: Uint128,
     memo: Option<String>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let recipient = deps.api.addr_validate(recipient.as_str())?;
@@ -1323,7 +1331,7 @@ fn try_batch_mint(
     rng: &mut ContractPrng,
     actions: Vec<batch::MintAction>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let constants = CONFIG.load(deps.storage)?;
@@ -1754,7 +1762,7 @@ fn try_transfer(
     amount: Uint128,
     memo: Option<String>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let recipient: Addr = deps.api.addr_validate(recipient.as_str())?;
@@ -1843,7 +1851,7 @@ fn try_batch_transfer(
         );
     }
 
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let symbol = CONFIG.load(deps.storage)?.symbol;
@@ -2023,7 +2031,7 @@ fn try_send(
     memo: Option<String>,
     msg: Option<Binary>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let recipient = deps.api.addr_validate(recipient.as_str())?;
@@ -2097,7 +2105,7 @@ fn try_batch_send(
         );
     }
 
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let mut messages = vec![];
@@ -2313,7 +2321,7 @@ fn try_transfer_from(
     amount: Uint128,
     memo: Option<String>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let owner = deps.api.addr_validate(owner.as_str())?;
@@ -2372,7 +2380,7 @@ fn try_batch_transfer_from(
     rng: &mut ContractPrng,
     actions: Vec<batch::TransferFromAction>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let mut notifications = vec![];
@@ -2492,7 +2500,7 @@ fn try_send_from(
     memo: Option<String>,
     msg: Option<Binary>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let owner = deps.api.addr_validate(owner.as_str())?;
@@ -2543,7 +2551,7 @@ fn try_batch_send_from(
     rng: &mut ContractPrng,
     actions: Vec<batch::SendFromAction>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let mut messages = vec![];
@@ -2616,7 +2624,7 @@ fn try_burn_from(
     amount: Uint128,
     memo: Option<String>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
     
     let owner = deps.api.addr_validate(owner.as_str())?;
@@ -2726,7 +2734,7 @@ fn try_batch_burn_from(
     info: MessageInfo,
     actions: Vec<batch::BurnFromAction>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let constants = CONFIG.load(deps.storage)?;
@@ -2841,7 +2849,7 @@ fn try_increase_allowance(
     amount: Uint128,
     expiration: Option<u64>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let spender = deps.api.addr_validate(spender.as_str())?;
@@ -2898,7 +2906,7 @@ fn try_decrease_allowance(
     amount: Uint128,
     expiration: Option<u64>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let spender = deps.api.addr_validate(spender.as_str())?;
@@ -3032,7 +3040,7 @@ fn try_burn(
     amount: Uint128,
     memo: Option<String>,
 ) -> StdResult<Response> {
-    let secret = INTERNAL_SECRET.load(deps.storage)?;
+    let secret = INTERNAL_SECRET_SENSITIVE.load(deps.storage)?;
     let secret = secret.as_slice();
 
     let constants = CONFIG.load(deps.storage)?;
