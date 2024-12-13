@@ -6,6 +6,8 @@ use cosmwasm_std::{
 };
 #[cfg(feature = "gas_evaporation")]
 use cosmwasm_std::Api;
+use rand_chacha::ChaChaRng;
+use rand_core::{RngCore, SeedableRng};
 use secret_toolkit::notification::{get_seed, notification_id, BloomParameters, ChannelInfoData, Descriptor, FlatDescriptor, GroupChannel, Notification, DirectChannel, StructDescriptor};
 use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
 use secret_toolkit::utils::{pad_handle_result, pad_query_result};
@@ -842,6 +844,29 @@ pub fn query_transactions(
             }
         }
     }
+
+    // deterministically obfuscate ids so they are not serial to prevent metadata leak
+    let internal_secret = INTERNAL_SECRET.load(deps.storage)?;
+    let internal_secret_u64: u64 = u64::from_be_bytes(internal_secret[..8].try_into().unwrap());
+    let txs = txs
+        .iter()
+        .map(|tx| {
+            // PRNG(PRNG(serial_id) ^ secret)
+            let mut rng = ChaChaRng::seed_from_u64(tx.id);
+            let serial_id_rand = rng.next_u64();
+            let new_seed = serial_id_rand ^ internal_secret_u64;
+            let mut rng = ChaChaRng::seed_from_u64(new_seed);
+            let new_id = rng.next_u64();
+            Tx {
+                id: new_id,
+                action: tx.action.clone(),
+                coins: tx.coins.clone(),
+                memo: tx.memo.clone(),
+                block_height: tx.block_height,
+                block_time: tx.block_time,
+            }
+        })
+        .collect();
 
     let result = QueryAnswer::TransactionHistory {
         txs,
