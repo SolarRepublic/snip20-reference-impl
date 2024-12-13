@@ -17,11 +17,12 @@ let xg_total_supply = 0n;
 // native denom
 const s_native_denom = 'uscrt';
 
-function transfer_from(
+export function transfer_from(
 	k_sender: ExternallyOwnedAccount,
 	k_recipient: ExternallyOwnedAccount,
 	xg_amount: bigint,
-	k_from?: ExternallyOwnedAccount
+	k_from?: ExternallyOwnedAccount,
+	b_batch=false
 ) {
 	const k_owner = k_from || k_sender;
 
@@ -47,17 +48,23 @@ function transfer_from(
 		};
 
 		// add to histories
-		k_owner.push(g_event);
-		k_recipient.push(g_event);
+		k_owner.push(g_event, b_batch);
+		k_recipient.push(g_event, b_batch);
 
 		// *_from action
 		if(k_from) {
 			// add to sender history as well
 			k_sender.migrate();
-			k_sender.push(g_event);
+			k_sender.push(g_event, b_batch);
 
-			// update allowances (object by ref appleis to both at once)
-			const xg_new_allowance = k_owner.allowancesGiven[k_sender.address].amount -= xg_amount;
+			// allowance not given?
+			const g_allowance = k_owner.allowancesGiven[k_sender.address];
+			if(!g_allowance) {
+				throw Error(`Suite did not find an allowance for ${k_sender.alias} to spend from owner ${k_owner.alias}`);
+			}
+
+			// update allowances (object by ref is to both at once)
+			const xg_new_allowance = g_allowance.amount -= xg_amount;
 			if(xg_new_allowance < 0n) {
 				throw Error(`${k_sender.label} overspent their allowance from ${k_owner.label} by ${-xg_new_allowance} when transferring ${xg_amount} to ${k_recipient.label}`);
 			}

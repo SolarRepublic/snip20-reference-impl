@@ -12,6 +12,7 @@ export function balance(k_eoa: ExternallyOwnedAccount, xg_amount: bigint): void 
 
 	// cannot be negative
 	if(k_eoa.balance < 0n) {
+		debugger;
 		throw Error(`Unexpected negative balance when modifying with ${xg_amount} on ${k_eoa.alias || k_eoa.address}`);
 	}
 }
@@ -53,7 +54,7 @@ export async function bank_send(k_sender: ExternallyOwnedAccount, xg_amount: big
 	}
 
 	// create and sign tx
-	const [atu8_raw,, si_txn] = await create_and_sign_tx_direct(k_sender.wallet, a_msgs, sg_limit);
+	const [atu8_raw, si_txn] = await create_and_sign_tx_direct(k_sender.wallet, a_msgs, sg_limit);
 
 	// pay for gas
 	bank(k_sender, -BigInt(k_sender.wallet.fees!(sg_limit)[0][0]));

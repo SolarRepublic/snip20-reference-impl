@@ -4,7 +4,7 @@ import type {EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/
 import type {SecretContract, TxResultTuple} from '@solar-republic/neutrino';
 import type {WeakSecretAccAddr, CwSecretAccAddr} from '@solar-republic/types';
 
-import {__UNDEFINED, F_IDENTITY, is_number, is_undefined, keys, snake, text_to_base64, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
+import {__UNDEFINED, bigint_abs, F_IDENTITY, is_bigint, is_number, is_undefined, keys, snake, text_to_base64, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
 import {broadcast_result, create_and_sign_tx_direct, secret_contract_responses_decrypt} from '@solar-republic/neutrino';
 
 import {K_TEF_LOCAL} from './contract';
@@ -96,7 +96,7 @@ export class Evaluator {
 			const xg_limit = 100_000n + (80_000n * BigInt(a_execs.length));
 
 			// sign transaction
-			const [atu8_raw, atu8_signdoc, si_txn] = await create_and_sign_tx_direct(
+			const [atu8_raw, si_txn] = await create_and_sign_tx_direct(
 				k_eoa.wallet,
 				a_execs.map(([atu8]) => atu8),
 				xg_limit
@@ -181,6 +181,11 @@ export class Evaluator {
 				try {
 					// interpret value
 					const z_value = g_args_raw[s_name] = await H_TYPE_CASTERS[s_type](a_args[i_param]);
+
+					// wtf
+					if(is_bigint(z_value) && bigint_abs(z_value) > 900_000_000_000n) {
+						debugger;
+					}
 
 					// delete key if value is undefined
 					if(is_undefined(z_value)) delete g_args_raw[s_name];

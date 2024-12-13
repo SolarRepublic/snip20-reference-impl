@@ -47,7 +47,7 @@ export type MigratedContractInterface = SecretContractInterface<{
 				schema: {
 					type: 'packet[16]';
 					version: 1;
-					packetSize: 17;
+					packet_size: 17;
 					data: {
 						label: 'packet';
 						type: 'struct';
@@ -72,7 +72,7 @@ export type MigratedContractInterface = SecretContractInterface<{
 				schema: {
 					type: 'packet[16]';
 					version: 1;
-					packetSize: 24;
+					packet_size: 24;
 					data: {
 						label: 'packet';
 						type: 'struct';
@@ -115,7 +115,7 @@ export const K_TEF_LOCAL = await TendermintEventFilter(P_SECRET_RPC);
  * @returns 
  */
 export async function exec(k_wallet: Wallet, atu8_msg: EncodedGoogleProtobufAny, xg_gas_limit: bigint): Promise<TxResultTuple> {
-	const [atu8_raw, atu8_signdoc, si_txn] = await create_and_sign_tx_direct(
+	const [atu8_raw, si_txn] = await create_and_sign_tx_direct(
 		k_wallet,
 		[atu8_msg],
 		xg_gas_limit
@@ -326,7 +326,7 @@ export async function migrate_contract(
 	sg_code_id: WeakUintStr,
 	k_wasm: SecretWasm,
 	sb16_codehash: CwHexLower,
-	g_msg: JsonValue={},
+	g_msg: JsonValue={}
 ) {
 	// encrypt migrate message
 	const atu8_body = await k_wasm.encodeMsg(sb16_codehash, g_msg);

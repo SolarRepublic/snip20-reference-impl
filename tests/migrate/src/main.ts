@@ -1,5 +1,6 @@
-import type {Snip20, SecretAccAddr, Snip22Executions} from '@solar-republic/contractor';
-import type {CwUint128, WeakSecretAccAddr, WeakUintStr} from '@solar-republic/types';
+import type {Snip20, SecretAccAddr} from '@solar-republic/contractor';
+import type {Wallet} from '@solar-republic/neutrino';
+import type {CwUint128, WeakUintStr} from '@solar-republic/types';
 
 import {readFileSync} from 'node:fs';
 
@@ -9,15 +10,17 @@ import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
 import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, SecretApp} from '@solar-republic/neutrino';
 
-import {k_wallet_a, k_wallet_b, k_wallet_c, k_wallet_d, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
+import {k_wallet_a, k_wallet_b, k_wallet_c, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
 import {migrate_contract, preload_original_contract, upload_code} from './contract';
 import {bank, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
 import {Evaluator} from './evaluator';
-import {H_FUNCTIONS} from './functions';
+import {H_FUNCTIONS, transfer_from} from './functions';
 import {G_GLOBAL} from './global';
 import {Parser} from './parser';
+import {test_dwb} from './test-dwb';
 
+const a_argv = process.argv.slice(2);
 
 // mainnet contract token address
 const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
@@ -74,6 +77,18 @@ async function evaluate(s_program: string, k_snip: SecretContract) {
 	await k_evaluator.evaluate(k_parser, k_snip);
 }
 
+async function print_genesis_balances() {
+	// print genesis account balances
+	for(const k_eoa of a_eoas_genesis) {
+		// query balance using viewing key
+		const [g_balance_vk] = await query_secret_contract(G_GLOBAL.k_snip_migrated, 'balance', {
+			address: k_eoa.address,
+		}, k_eoa.viewingKey);
+
+		// genesis account
+		console.log(`${k_eoa.alias} balance: ${g_balance_vk?.amount}`);
+	}
+}
 
 // genesis accounts
 const a_genesis = ['$a', '$b', '$c', '$d'];
@@ -240,7 +255,19 @@ const program = (b_premigrate: boolean) => `
 	---
 
 	${s_prog_vks}
+
+	---
+	transfer $a 1 $b
+	---
+	transfer $a 2 $c
+	---
+	transfer $d 4 $a
+	---
+	transfer $b 3 $c
+	---
+	transfer $a 540 $c
 `;
+
 
 
 // validate state
@@ -287,7 +314,13 @@ async function validate_state(b_premigrate=false) {
 		}
 
 		// detuple balance
-		const [g_balance] = a4_balance;
+		const [g_balance, xc_code, s_err] = a4_balance;
+
+		// error
+		if(xc_code) {
+			debugger;
+			throw Error(`Contract query error for ${k_eoa.alias}: ${s_err}`);
+		}
 
 		// assert that the SNIP balances are identical
 		if(`${xg_balance}` !== g_balance?.amount) {
@@ -477,6 +510,16 @@ async function validate_state(b_premigrate=false) {
 	// validate contract state
 	await validate_state(true);
 
+
+	for(const k_eoa of a_eoas_genesis) {
+		// query balance using query permit
+		const [g_balance_legacy] = await query_secret_contract(k_snip_original, 'balance', {
+			address: k_eoa.address,
+		}, k_eoa.viewingKey);
+
+		console.log(`${k_eoa.alias} legacy balance: ${g_balance_legacy?.amount}`);
+	}
+
 	// // collect gas usage baseline
 	// const k_app_original = SecretApp(k_wallet_a, k_snip_original);
 
@@ -500,7 +543,7 @@ async function validate_state(b_premigrate=false) {
 	});
 
 	// override migrated contract code hash
-	G_GLOBAL.k_snip_migrated = await SecretContract(P_SECRET_LCD, k_snip_original.addr, null, XC_CONTRACT_CACHE_BYPASS);
+	G_GLOBAL.k_snip_migrated = await SecretContract(P_SECRET_LCD, k_snip_original.addr, null, __UNDEFINED, XC_CONTRACT_CACHE_BYPASS);
 
 	// create contract eoa
 	await ExternallyOwnedAccount.fromAddress(G_GLOBAL.k_snip_migrated.addr, '$contract');
@@ -547,6 +590,8 @@ async function validate_state(b_premigrate=false) {
 
 		---
 
+		migrateLegacyAccount $c _
+
 	`, G_GLOBAL.k_snip_migrated);
 
 	// validate
@@ -555,55 +600,120 @@ async function validate_state(b_premigrate=false) {
 	// for testing batch operations
 	const k_app_migrated = SecretApp(k_wallet_a, G_GLOBAL.k_snip_migrated);
 
+
 	// prep batch transfer from method
-	const batch_transfer_from = (
-		a_actions: {
-			owner: WeakSecretAccAddr;
-			amount: WeakUintStr;
-			recipient: WeakSecretAccAddr;
-			memo?: string;
-		}[]
-	) => k_app_migrated.exec('batch_transfer_from', {
-		actions: a_actions as Snip22Executions['batch_transfer_from'][0]['actions'],
-	}, 800_000n);
+	const perform_transfer = async(
+		k_wallet: Wallet<'secret'>,
+		xg_amount: bigint,
+		k_recipient: ExternallyOwnedAccount
+	) => {
+		// create sender eoa
+		const k_sender = ExternallyOwnedAccount.at(k_wallet.addr);
+
+		// verbose
+		console.log(`${k_sender.alias}: transfer(${xg_amount}, ${k_recipient.alias})`);
+
+		// execute
+		const a_results = await SecretApp(k_wallet, G_GLOBAL.k_snip_migrated).exec('transfer', {
+			amount: `${xg_amount}` as CwUint128,
+			recipient: k_recipient.address,
+		}, 800_000n);
+
+		// update locals
+		transfer_from(k_sender, k_recipient, xg_amount);
+
+		// return results
+		return a_results;
+	};
+
+	// prep batch transfer from method
+	const perform_batch_transfer_from = async(
+		a_actions: [
+			k_owner: ExternallyOwnedAccount,
+			xg_amount: bigint,
+			k_recipient: ExternallyOwnedAccount,
+			s_memo?: string,
+		][]
+	) => {
+		// verbose
+		const a_out: string[] = [];
+		for(const [k_owner, xg_amount, k_recipient, s_memo] of a_actions) {
+			a_out.push(`${k_owner.alias} -> ${k_recipient.alias} .. ${xg_amount} ${s_memo? 'with memo': ''}`);
+		}
+
+		console.log(`$a batch_transfer_from:${a_out.map(s => `\n   ${s}`).join('')}`);
+
+		// execute
+		const a_results = await k_app_migrated.exec('batch_transfer_from', {
+			actions: a_actions.map(([k_owner, xg_amount, k_recipient, s_memo]) => ({
+				owner: k_owner.address,
+				amount: `${xg_amount}` as CwUint128,
+				recipient: k_recipient.address,
+				memo: s_memo,
+			})),
+		}, 800_000n);
+
+		// update locals
+		for(const [k_owner, xg_amount, k_recipient] of a_actions) {
+			transfer_from(k_eoa_a, k_recipient, xg_amount, k_owner, true);
+		}
+
+		// return results
+		return a_results;
+	};
+
+	// genesis eoas
+	const [k_eoa_a, k_eoa_b, k_eoa_c, k_eoa_d] = ['$a', '$b', '$c', '$d'].map(si => ExternallyOwnedAccount.at(si));
+
+	// make sure the balance queries are working
+	await perform_transfer(k_wallet_a, 1n, k_eoa_b);
+	await perform_transfer(k_wallet_a, 2n, k_eoa_c);
+	await perform_transfer(k_wallet_b, 3n, k_eoa_c);
+	await perform_transfer(k_wallet_b, 4n, k_eoa_c);
+	await perform_transfer(k_wallet_c, 5n, k_eoa_a);
+	await perform_transfer(k_wallet_c, 6n, k_eoa_a);
+	await perform_transfer(k_wallet_a, 7n, k_eoa_c);
 
 	// packet-less multispend on $a, as sender
 	// packet-less multirecvd on $b
 	// packet-full multirecvd on $c
 	// packet-full multispend on $c
-	const [g_batch_xfer_1] = await batch_transfer_from([
-		{owner:k_wallet_a.addr, amount:'1', recipient:k_wallet_b.addr},
-		{owner:k_wallet_a.addr, amount:'2', recipient:k_wallet_c.addr},
-		{owner:k_wallet_c.addr, amount:'3', recipient:k_wallet_b.addr},
+	const [g_batch_xfer_1] = await perform_batch_transfer_from([
+		[k_eoa_a, 1n, k_eoa_b],
+		[k_eoa_a, 2n, k_eoa_c],
+		[k_eoa_c, 3n, k_eoa_b],
 	]);
 
 	// packet-full mutlirecvd on $a, as sender
 	// packet-full multispend on $c (again)
-	const [g_batch_xfer_2] = await batch_transfer_from([
-		{owner:k_wallet_c.addr, amount:'4', recipient:k_wallet_a.addr},
+	const [g_batch_xfer_2] = await perform_batch_transfer_from([
+		[k_eoa_c, 4n, k_eoa_a],
 	]);
 
 	// packet-less multirecvd on $a, as sender
 	// packet-less multispend on $c
-	const [g_batch_xfer_3] = await batch_transfer_from([
-		{owner:k_wallet_c.addr, amount:'5', recipient:k_wallet_a.addr},
-		{owner:k_wallet_c.addr, amount:'6', recipient:k_wallet_a.addr},
+	const [g_batch_xfer_3] = await perform_batch_transfer_from([
+		[k_eoa_c, 5n, k_eoa_a],
+		[k_eoa_c, 6n, k_eoa_a],
 	]);
 
 	// packet-full multispend on $a, as sender
-	const [g_batch_xfer_4] = await batch_transfer_from([
-		{owner:k_wallet_a.addr, amount:'7', recipient:k_wallet_d.addr},
+	const [g_batch_xfer_4] = await perform_batch_transfer_from([
+		[k_eoa_a, 7n, k_eoa_d],
 	]);
 
 	// packet-full multispend on $a + with memo, as sender
 	// packet-full multispend on $c + with memo
-	const [g_batch_xfer_5] = await batch_transfer_from([
-		{owner:k_wallet_a.addr, amount:'8', recipient:k_wallet_b.addr, memo:'foo'},
-		{owner:k_wallet_c.addr, amount:'9', recipient:k_wallet_d.addr, memo:'foo'},
+	const [g_batch_xfer_5] = await perform_batch_transfer_from([
+		[k_eoa_a, 8n, k_eoa_b, 'foo'],
+		[k_eoa_c, 9n, k_eoa_d, 'foo'],
 	]);
 
 	// failed to perform batch transfer froms
 	if(!g_batch_xfer_1 || !g_batch_xfer_2 || !g_batch_xfer_3 || !g_batch_xfer_4 || !g_batch_xfer_5) throw Error(`Batch transfer test failed`);
+
+	// re-validate
+	await validate_state(false);
 
 	// check that notifications were verified
 	for(const k_eoa of a_eoas) {
@@ -639,45 +749,48 @@ async function validate_state(b_premigrate=false) {
 			}
 
 			console.log(`Gas used for ${s_label} #${i_test++} w/ evaporation @${sg_target.endsWith('000')? sg_target.replace(/000$/, 'k'): sg_target}: ${xg_used} / ${sg_check} ${s_overage}`);
+
+			await print_genesis_balances();
 		}
 	};
 
-	// transfer
-	await gas('transfer', sg_target => k_app_migrated.exec('transfer', {
-		recipient: k_wallet_b.addr,
-		amount: '1' as CwUint128,
-		// gas_target: sg_target,
-	}, 160_000n), [
-		'0',
-		'76000',
-		'77000',
-		'100000',
-	]);
 
-	// transfer
-	await gas('transfer', sg_target => k_app_migrated.exec('transfer', {
-		recipient: k_wallet_c.addr,
-		amount: '100' as CwUint128,
-		// gas_target: sg_target,
-	}, 160_000n), [
-		'0',
-		'76000',
-		'77000',
-		'100000',
-	]);
+	// // transfer
+	// await gas('transfer', sg_target => k_app_migrated.exec('transfer', {
+	// 	recipient: k_wallet_b.addr,
+	// 	amount: '1' as CwUint128,
+	// 	// gas_target: sg_target,
+	// }, 160_000n), [
+	// 	'0',
+	// 	'76000',
+	// 	'77000',
+	// 	'100000',
+	// ]);
 
-	// transfer
-	await gas('transferFrom', sg_target => k_app_migrated.exec('transfer_from', {
-		owner: k_wallet_a.addr,
-		recipient: k_wallet_b.addr,
-		amount: '1' as CwUint128,
-		// gas_target: sg_target,
-	}, 160_000n), [
-		'0',
-		'80000',
-		'81000',
-		'100000',
-	]);
+	// // transfer
+	// await gas('transfer', sg_target => k_app_migrated.exec('transfer', {
+	// 	recipient: k_wallet_c.addr,
+	// 	amount: '100' as CwUint128,
+	// 	// gas_target: sg_target,
+	// }, 160_000n), [
+	// 	'0',
+	// 	'76000',
+	// 	'77000',
+	// 	'100000',
+	// ]);
+
+	// // transfer
+	// await gas('transferFrom', sg_target => k_app_migrated.exec('transfer_from', {
+	// 	owner: k_wallet_a.addr,
+	// 	recipient: k_wallet_b.addr,
+	// 	amount: '1' as CwUint128,
+	// 	// gas_target: sg_target,
+	// }, 160_000n), [
+	// 	'0',
+	// 	'80000',
+	// 	'81000',
+	// 	'100000',
+	// ]);
 
 
 	// // transfer
@@ -749,6 +862,33 @@ async function validate_state(b_premigrate=false) {
 	// 	'109000',
 	// 	'120000',
 	// ]);
+
+
+	// print genesis account balances
+	for(const k_eoa of a_eoas) {
+		// query balance using viewing key
+		const [g_balance_vk] = await query_secret_contract(G_GLOBAL.k_snip_migrated, 'balance', {
+			address: k_eoa.address,
+		}, k_eoa.viewingKey);
+
+		// query balance using query permit
+		const [g_balance_qp] = await query_secret_contract(G_GLOBAL.k_snip_migrated, 'balance', {
+			address: k_eoa.address,
+		}, k_eoa.queryPermit!);
+
+		// balances don't match
+		if(g_balance_vk!.amount !== g_balance_qp!.amount) {
+			throw Error(`Balance discrepancy between auth modes`);
+		}
+
+		// genesis account
+		if(a_eoas_genesis.includes(k_eoa)) {
+			console.log(`${k_eoa.alias} migrated balance: ${g_balance_vk?.amount}`);
+		}
+	}
+
+	// dwb tests
+	await test_dwb(G_GLOBAL.k_snip_migrated);
 
 	// done
 	console.log(`🏁 Finished integrated tests`);

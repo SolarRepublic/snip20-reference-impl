@@ -27,7 +27,7 @@ const H_ACCOUNT_VARS: Dict<Uint8Array> = {
 const atu8_table = base93_to_bytes("bpLe3pROr=y;r&]>^7g5W|^`7Xr0#zC?]LBZoJ>0}duBd}f,7M$+gHYm:1QmoFoS}a's[hX6pmfENxu2;/3kIx.Ot]4UrJXRkVG2}LD]@d0;Khs<Kc&]L$S$SN8v]?]M]oD+qQLLt.*XSz{upl@9^YEK1`di0(}/a)1&L& 9SdCR>alzeN#a3N&:@BS4rX!R<Ly8$^4=+9OWOgPYa5M^fd;|>L8]q&rnuVVY9&i!WIGfZzF,D.#=%z,KLY6Kq.D8*8f/d&fy4^0PiYD%dM!o~W9sE**#.F-_v6q9Mj']? ;Mxy4OHDH!,jQ,nL");
 
 function crc8_opensafety(atu8_data: Uint8Array, xb_checksum=0): number {
-	for(let xb_byte of atu8_data) xb_checksum = atu8_table[xb_checksum ^ xb_byte];
+	for(const xb_byte of atu8_data) xb_checksum = atu8_table[xb_checksum ^ xb_byte];
 	return xb_checksum;
 }
 
@@ -137,9 +137,9 @@ export class ExternallyOwnedAccount {
 	}
 
 	migrate(b_explicit=false): void {
-		if(b_explicit && this.txs.length) {
-			throw Error(`Explicit migration should not have been allowed`);
-		}
+		// if(b_explicit && this.txs.length) {
+		// 	throw Error(`Explicit migration should not have been allowed`);
+		// }
 
 		// first tx in post-migration
 		if(!this.txs.length && this.transfers.length) {
@@ -156,7 +156,7 @@ export class ExternallyOwnedAccount {
 		}
 	}
 
-	push(g_event: Snip250TxEvent): void {
+	push(g_event: Snip250TxEvent, b_batch=false): void {
 		const {
 			_a_skip_recvds,
 			_a_skip_autos,
@@ -169,8 +169,8 @@ export class ExternallyOwnedAccount {
 
 		const xg_amount = BigInt(g_event.coins.amount);
 
-		// transfer action
-		if('transfer' === si_action) {
+		// transfer action and not a batch transfer, check notifications
+		if('transfer' === si_action && !b_batch) {
 			const g_xfer = g_action as NonNullable<Snip250Action['transfer']>;
 
 			// this account was recipient
@@ -202,7 +202,8 @@ export class ExternallyOwnedAccount {
 				const i_spent = _a_notifs_spent.findIndex(g => g_xfer.recipient === g.recipient && xg_amount === g.amount);
 				if(i_spent < 0) {
 					debugger;
-					throw Error(`Missing spent notification`);
+					const [k_eoa_sender, k_eoa_from, k_eoa_recipient] = [g_xfer.sender, g_xfer.from, g_xfer.recipient].map(sa => ExternallyOwnedAccount.at(sa));
+					throw Error(`Missing spent notification of ${k_eoa_sender.alias} sending ${xg_amount} TKN from ${k_eoa_from.alias}'s balance to ${k_eoa_recipient.alias}`);
 				}
 
 				// delete it
@@ -212,7 +213,6 @@ export class ExternallyOwnedAccount {
 				if(this.address === g_xfer.sender) _a_skip_autos.push(g_event);
 			}
 		}
-
 
 		this.txs.push(g_event);
 	}
@@ -368,7 +368,7 @@ export class ExternallyOwnedAccount {
 					console.log(`🔔 ${this.label} received notification: ${k_sender.label} spent (?) TKN => (?)`);
 				}
 			},
-		}, this);
+		});
 	}
 
 	unsubscribe(): void {

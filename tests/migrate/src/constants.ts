@@ -4,7 +4,7 @@ import {base64_to_bytes} from '@blake.regalia/belt';
 import {random_bytes} from '@solar-republic/crypto';
 import {Wallet} from '@solar-republic/neutrino';
 
-export const SR_LOCAL_WASM = (process.env['CONTRACT_WASM'] || '../../contract.wasm');
+export const SR_LOCAL_WASM = process.env['CONTRACT_WASM'] || '../../contract.wasm';
 export const P_SECRET_LCD = (process.env['SECRET_LCD'] || 'http://localhost:1317') as TrustedContextUrl;
 export const P_SECRET_RPC = (process.env['SECRET_RPC'] || 'http://localhost:26656') as TrustedContextUrl;
 export const SI_SECRET_CHAIN = process.env['SECRET_CHAIN'] || 'secretdev-1';
@@ -34,11 +34,11 @@ export const [k_wallet_a, k_wallet_b, k_wallet_c, k_wallet_d] = await Promise.al
 
 export const k_wallet_admin = await SecretWallet(random_bytes(32));
 
-// export const H_ADDRS = {
-// 	[k_wallet_a.addr]: 'Alice',
-// 	[k_wallet_b.addr]: 'Bob',
-// 	[k_wallet_c.addr]: 'Carol',
-// 	[k_wallet_d.addr]: 'David',
-// };
+export const H_ADDRS = {
+	[k_wallet_a.addr]: 'Alec',
+	[k_wallet_b.addr]: 'Brad',
+	[k_wallet_c.addr]: 'Candice',
+	[k_wallet_d.addr]: 'Donald',
+};
 
 export const N_DECIMALS = 6;
