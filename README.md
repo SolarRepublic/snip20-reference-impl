@@ -1,6 +1,6 @@
 # SNIP-20 Reference Implementation
 
-This is an implementation of a [SNIP-20](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md), [SNIP-21](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-21.md), [SNIP-22](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-22.md), [SNIP-23](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-23.md), [SNIP-24](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-24.md), [SNIP-25](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-25.md) and [SNIP-26](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-26.md) compliant token contract.
+This is an implementation of a [SNIP-20](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md), [SNIP-21](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-21.md), [SNIP-22](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-22.md), [SNIP-23](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-23.md), [SNIP-24](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-24.md), [~~SNIP-25~~](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-25.md), [SNIP-26](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-26.md), [~~SNIP-50~~](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-50.md) and [SNIP-52](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-52.md) compliant token contract.
 
 > **Note:**
 > The master branch contains new features not covered by officially-released SNIPs and may be subject to change. When releasing a token on mainnet, we recommend you start with a [tagged release](https://github.com/scrtlabs/snip20-reference-impl/tags) to ensure compatibility with SNIP standards.
@@ -66,43 +66,8 @@ All transactions are encrypted, so if you want to see the error returned by a fa
 
 `secretcli q compute tx <TX_HASH>`
 
-# SNIP 25 Security Update
 
-## Security Changes
-1. Implemented the ability to have decoy addresses for every operation that access account's balance
-2. Converted every add operation related to account's balance and total supply
-3. Started using u128 instead of Uint128
-
-## Decoys
-### Transaction That Support Decoys
-1. Redeem
-2. Deposit
-3. Transfer
-4. TransferFrom
-5. Send
-6. SendFrom
-7. Burn
-8. BurnFrom
-9. Mint
-10. BatchTransfer - For every action (The strength of the decoys will be the minimal strength of all of the actions)
-11. BatchSend - For every action (The strength of the decoys will be the minimal strength of all of the actions)
-12. BatchTransferFrom - For every action (The strength of the decoys will be the minimal strength of all of the actions)
-13. BatchSendFrom - For every action (The strength of the decoys will be the minimal strength of all of the actions)
-14. BatchMint - For every action (The strength of the decoys will be the minimal strength of all of the actions)
-15. BatchBurnFrom - For every action (The strength of the decoys will be the minimal strength of all of the actions)
-
-### Example
-```secretcli tx compute execute <contract-address> '{"transfer":{"recipient":"<address>","amount":"<amount>", "entropy":"<base64_encoded_entropy>", "decoys":<[addresses_list]>}}' --from <account>```
-
-## Future Work
-| Topic | Immediate-term solution | Medium-term solution | Long-term solution |
-| --- | --- | --- | --- |
-| Receiver privacy | Decoys - offer limited privacy, since it depends a lot on how you choose decoys. There’s probably no way to select decoys effectively enough, and thus it only makes it a bit harder but effectively doesn’t provide receiver privacy to a sophisticated long-term attacker | Some sort of bucketing? - still no clear path forward| ORAM? - still no clear path forward |
-| Transfer amount privacy - subtractions (Transfer/Send/Burn) | None | None | Merkle proofs for storage reads - will make it very difficult to simulate transactions and play with storage. |
-
-# SNIP 25 Other Updates
-
-## All Allowances
+## SNIP-26: Allowances
 Adds the ability for an owner to query for all allowances they have given out, as well as for a spender to query for all allowances they have received.
 
 ## Queries
@@ -175,3 +140,23 @@ Results SHOULD be paginated. Results MUST be sorted in reverse chronological ord
   }
 }
 ```
+
+## Privacy Enhancements
+
+ - All transfers/sends (including batch and *_from) use the delayed write buffer (dwb) to address "spicy printf" storage access pattern attacks.
+ - Additionally, a bitwise trie of bucketed entries (dwb) creates dynamic anonymity sets for senders/owners, whose balance must be checked when transferring/sending. It also enhances privacy for recipients.
+ - When querying for Transaction History, each event's `id` field returned in responses are deterministically obfuscated by `ChaChaRng(XorBytes(ChaChaRng(actual_event_id), internal_secret)) >> (64 - 53)` for better privacy. Without this, an attacker could deduce the number of events that took place between two transactions.
+
+
+## SNIP-52: Private Push Notifications
+
+This contract publishes encrypted messages to the event log which carry data intended to notify recipients of actions that affect them, such as token transfer and allowances.
+
+Direct channels:
+ - `recvd` -- emitted to a recipient when their account receives funds via one of `transfer`, `send`, `transfer_from`, or `send_from`. The notification data includes the amount, the sender, and the memo length.
+ - `spent` -- emitted to an owner when their funds are spent, via one of `transfer`, `send`, `transfer_from` or `send_from`. The notification data includes the amount, the recipient, the owner's new balance, and a few other pieces of information such as memo length, number of actions, and whether the spender was the transaction's sender.
+ - `allowance` -- emitted to a spender when some allower account has granted them or modified an existing allowance to spend their tokens, via `increase_allowance` or `decrease_allowance`. The notification data includes the amount, the allower, and the expiration of the allowance.
+
+Group channels:
+ - `multirecvd` -- emitted to a group of recipients (up to 16) when a `batch_transfer`, `batch_send`, `batch_transfer_from`, or `batch_send_from` has been executed. Each recipient will receive a packet of data containing the amount they received, the last 8 bytes of the owner's address, and some additional metadata.
+ - `multispent` -- emitted to a group of spenders (up to 16) when a `batch_transfer_from`, or `batch_send_from` has been executed. Each spender will receive a packet of data containing the amount that was spent, the last 8 bytes of the recipient's address, and some additional metadata.
