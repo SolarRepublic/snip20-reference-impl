@@ -2,28 +2,28 @@
   "private": "true",
   "type": "module",
   "scripts": {
-    "build": "tsc && tsc-esm-fix --tsconfig tsconfig.tsc-esm-fix.json --target=dist",
     "make": "pushd ../../ && make compile-integration && popd",
-    "test": "bun run make && NODE_ENV=development bun run src/main.ts"
+    "build": "tsc && tsc-esm-fix --tsconfig tsconfig.tsc-esm-fix.json --target=dist",
+    "test": "pnpm run make && pnpm run build && NODE_ENV=development node --env-file=.env run dist/main.js"
   },
   "devDependencies": {
-    "@blake.regalia/belt": "^0.45.3",
+    "@blake.regalia/belt": "^0.47.2",
     "@blake.regalia/eslint-config-elite": "^0.4.4",
     "@blake.regalia/tsconfig": "^0.2.0",
     "@solar-republic/types": "^0.3.4",
     "@types/chai": "^5.0.1",
-    "@types/node": "^22.10.1",
+    "@types/node": "^22.10.2",
     "chai": "^5.1.1",
     "chai-bites": "^0.2.0",
     "eslint": " 8",
-    "tsc-esm-fix": "^3.0.1",
-    "typescript": "^5.6.3"
+    "tsc-esm-fix": "^3.1.2",
+    "typescript": "^5.7.2"
   },
   "dependencies": {
-    "@solar-republic/contractor": "^0.9.7",
-    "@solar-republic/cosmos-grpc": "^0.18.0-beta.6",
+    "@solar-republic/contractor": "^0.10.0",
+    "@solar-republic/cosmos-grpc": "^0.18.0-beta.8",
     "@solar-republic/crypto": "^0.2.14",
-    "@solar-republic/neutrino": "1.7.0-beta.24",
+    "@solar-republic/neutrino": "1.7.0-beta.28",
     "@solar-republic/wasm-secp256k1": "^0.4.2",
     "bignumber.js": "^9.1.2",
     "ts-toolbelt": "^9.6.0"
