@@ -1,38 +1,30 @@
-import type {Snip20TransferEvent, Snip250TxEvent} from './types';
 import type {Snip20, SecretAccAddr, Snip22Executions} from '@solar-republic/contractor';
-
-
 import type {CwUint128, WeakSecretAccAddr, WeakUintStr} from '@solar-republic/types';
 
 import {readFileSync} from 'node:fs';
 
-import {__UNDEFINED, bigint_greater, bigint_lesser, canonicalize_json, is_number, keys, MutexPool, stringify_json} from '@blake.regalia/belt';
-
+import {__UNDEFINED, canonicalize_json, keys, MutexPool, stringify_json} from '@blake.regalia/belt';
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
-import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, exec_secret_contract, exec_fees, SecretApp} from '@solar-republic/neutrino';
+import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, SecretApp} from '@solar-republic/neutrino';
 
 import {k_wallet_a, k_wallet_b, k_wallet_c, k_wallet_d, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
-import {migrate_contract, preload_original_contract, upload_code, type MigratedContractInterface} from './contract';
-import {bank, balance, bank_send} from './cosmos';
+import {migrate_contract, preload_original_contract, upload_code} from './contract';
+import {bank, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
-import {Evaluator, handler} from './evaluator';
+import {Evaluator} from './evaluator';
+import {H_FUNCTIONS} from './functions';
+import {G_GLOBAL} from './global';
 import {Parser} from './parser';
 
-const XG_UINT128_MAX = (1n << 128n) - 1n;
-
-let xg_total_supply = 0n;
 
 // mainnet contract token address
 const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
 
-// native denom
-const s_native_denom = 'uscrt';
 
 // preload sSCRT
 const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_a);
-let k_snip_migrated: SecretContract<MigratedContractInterface>;
 
 
 /*
@@ -51,245 +43,6 @@ available sSCRT methods:
 	`change_admin`,
 	`set_contract_status`
 */
-
-function transfer_from(
-	k_sender: ExternallyOwnedAccount,
-	k_recipient: ExternallyOwnedAccount,
-	xg_amount: bigint,
-	k_from?: ExternallyOwnedAccount
-) {
-	const k_owner = k_from || k_sender;
-
-	// migrated
-	if(k_snip_migrated) {
-		// init migration
-		k_owner.migrate();
-		k_recipient.migrate();
-
-		// create event
-		const g_event: Snip250TxEvent = {
-			action: {
-				transfer: {
-					from: (k_owner || k_sender).address,
-					sender: k_sender.address,
-					recipient: k_recipient.address,
-				},
-			},
-			coins: {
-				denom: 'TKN',
-				amount: `${xg_amount}` as const,
-			},
-		};
-
-		// add to histories
-		k_owner.push(g_event);
-		k_recipient.push(g_event);
-
-		// *_from action
-		if(k_from) {
-			// add to sender history as well
-			k_sender.migrate();
-			k_sender.push(g_event);
-
-			// update allowances (object by ref appleis to both at once)
-			const xg_new_allowance = k_owner.allowancesGiven[k_sender.address].amount -= xg_amount;
-			if(xg_new_allowance < 0n) {
-				throw Error(`${k_sender.label} overspent their allowance from ${k_owner.label} by ${-xg_new_allowance} when transferring ${xg_amount} to ${k_recipient.label}`);
-			}
-		}
-	}
-	// legacy
-	else {
-		// create legacy event
-		const g_event: Snip20TransferEvent = {
-			from: k_owner.address,
-			sender: k_sender.address,
-			receiver: k_recipient.address,
-			coins: {
-				denom: 'TKN',
-				amount: `${xg_amount}` as const,
-			},
-		};
-
-		// add to histories
-		k_owner.transfers.push(g_event);
-		k_recipient.transfers.push(g_event);
-
-		// add to sender history as well
-		if(k_owner !== k_sender) k_sender.transfers.push(g_event);
-	}
-
-	// update balances
-	balance(k_owner, -xg_amount);
-	balance(k_recipient, xg_amount);
-}
-
-function set_allowance(
-	k_sender: ExternallyOwnedAccount,
-	sa_spender: WeakSecretAccAddr,
-	xg_amount: bigint,
-	n_exp: number,
-	si_which: 'increase' | 'decrease'
-) {
-	const h_given = k_sender.allowancesGiven;
-	const k_spender = ExternallyOwnedAccount.at(sa_spender);
-	const h_recvd = k_spender.allowancesReceived;
-	const sa_sender = k_sender.address;
-	const g_prev = h_given[sa_spender];
-
-	if(k_snip_migrated) {
-		const xg_allowance = 'increase' === si_which
-			? bigint_lesser(XG_UINT128_MAX, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) + xg_amount)
-			: bigint_greater(0n, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) - xg_amount);
-
-		h_given[sa_spender] = h_recvd[sa_sender] = {
-			amount: xg_allowance,
-			expiration: n_exp,
-		};
-
-		k_spender.check_allowance_notif(k_sender, xg_allowance, n_exp);
-	}
-}
-
-/**
- * suite handlers for tracking and double checking expected states in contract
- */
-const H_FUNCTIONS = {
-	createViewingKey: handler('entropy: string => key: string', (k_sender, g_args, g_answer) => {
-		k_sender.viewingKey = g_answer.key;
-	}),
-
-	setViewingKey: handler('key: string', (k_sender, g_args) => {
-		k_sender.viewingKey = g_args.key;
-	}),
-
-	deposit: handler('amount: token', (k_sender, g_args) => {
-		// post-migration
-		if(k_snip_migrated) {
-			k_sender.migrate();
-
-			// add tx to history
-			k_sender.push({
-				action: {
-					deposit: {},
-				},
-				coins: {
-					denom: s_native_denom,
-					amount: `${g_args.amount}`,
-				},
-			});
-		}
-
-		// update balances
-		bank(k_sender, -g_args.amount);
-		balance(k_sender, g_args.amount);
-	}, {
-		before: (k_eoa, g_args) => ({
-			funds: g_args.amount,
-		}),
-	}),
-
-	redeem: handler('amount: token', (k_sender, g_args) => {
-		// post-migration
-		if(k_snip_migrated) {
-			k_sender.migrate();
-
-			// add tx to history
-			k_sender.push({
-				action: {
-					redeem: {},
-				},
-				coins: {
-					denom: 'TKN',
-					amount: `${g_args.amount}`,
-				},
-			});
-		}
-
-		// update balances
-		balance(k_sender, -g_args.amount);
-		bank(k_sender, g_args.amount);
-	}),
-
-	transfer: handler('amount: token, recipient: account', (k_sender, g_args, _, [,,g_meta]) => {
-		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
-	}),
-
-	send: handler('amount: token, recipient: account, msg: json', (k_sender, g_args) => {
-		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
-	}),
-
-	transferFrom: handler('amount: token, owner: account, recipient: account', (k_sender, g_args) => {
-		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount, ExternallyOwnedAccount.at(g_args.owner));
-	}),
-
-	sendFrom: handler('amount: token, owner: account, recipient: account, msg: json', (k_sender, g_args) => {
-		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount, ExternallyOwnedAccount.at(g_args.owner));
-	}),
-
-	increaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
-		set_allowance(k_sender, sa_spender, xg_amount, n_exp, 'increase');
-	}),
-
-	decreaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
-		set_allowance(k_sender, sa_spender, xg_amount, n_exp, 'decrease');
-	}),
-
-	burn: handler('amount: token', (k_sender, g_args) => {
-		// post-migration
-		if(k_snip_migrated) {
-			k_sender.migrate();
-
-			// add tx to history
-			k_sender.push({
-				action: {
-					burn: {
-						burner: k_sender.address,
-						owner: k_sender.address,
-					},
-				},
-				coins: {
-					denom: 'TKN',
-					amount: `${g_args.amount}`,
-				},
-			});
-		}
-
-		// update balances
-		balance(k_sender, -g_args.amount);
-		xg_total_supply -= g_args.amount;
-	}),
-
-	burnFrom: handler('amount: token, owner: account', (k_sender, g_args) => {
-		// post-migration
-		if(k_snip_migrated) {
-			k_sender.migrate();
-
-			// add tx to history
-			k_sender.push({
-				action: {
-					burn: {
-						burner: k_sender.address,
-						owner: g_args.owner,
-					},
-				},
-				coins: {
-					denom: 'TKN',
-					amount: `${g_args.amount}`,
-				},
-			});
-		}
-
-		// update balances
-		balance(ExternallyOwnedAccount.at(g_args.owner), -g_args.amount);
-		xg_total_supply -= g_args.amount;
-	}),
-
-	migrateLegacyAccount: handler('padding: string', (k_sender, g_args) => {
-		k_sender.migrate(true);
-	}),
-};
-
 
 const G_GAS_USED: {
 	[si_key in keyof typeof H_FUNCTIONS]: (WeakUintStr | undefined)[];
@@ -512,7 +265,7 @@ async function validate_state(b_premigrate=false) {
 			b_premigrate? queryCosmosBankBalance(P_SECRET_LCD, sa_owner, 'uscrt'): [],
 
 			// query contract balance
-			query_secret_contract(b_premigrate? k_snip_original: k_snip_migrated, 'balance', {
+			query_secret_contract(b_premigrate? k_snip_original: G_GLOBAL.k_snip_migrated, 'balance', {
 				address: sa_owner,
 			}, k_eoa.viewingKey),
 
@@ -522,7 +275,7 @@ async function validate_state(b_premigrate=false) {
 					address: sa_owner,
 					page_size: 2048,
 				}, k_eoa.viewingKey)
-				: query_secret_contract(k_snip_migrated, 'legacy_transfer_history', {
+				: query_secret_contract(G_GLOBAL.k_snip_migrated, 'legacy_transfer_history', {
 					address: sa_owner,
 					page_size: 2048,
 				}, k_eoa.viewingKey),
@@ -580,7 +333,7 @@ async function validate_state(b_premigrate=false) {
 			const a_canonical_txs = k_eoa.txs.map(g => stringify_json(canonicalize_json(g)));
 
 			// query tx history
-			const a4_history_txs = await query_secret_contract(k_snip_migrated, 'transaction_history', {
+			const a4_history_txs = await query_secret_contract(G_GLOBAL.k_snip_migrated, 'transaction_history', {
 				address: k_eoa.address,
 				page_size: 2048,
 			}, k_eoa.viewingKey);
@@ -622,13 +375,13 @@ async function validate_state(b_premigrate=false) {
 			// allowances
 			{
 				const [[g_given], [g_received]] = await Promise.all([
-					query_secret_contract(k_snip_migrated, 'allowances_given', {
+					query_secret_contract(G_GLOBAL.k_snip_migrated, 'allowances_given', {
 						address: k_eoa.address,
 						owner: k_eoa.address,
 						page_size: 2048,
 					}, k_eoa.viewingKey),
 
-					query_secret_contract(k_snip_migrated, 'allowances_received', {
+					query_secret_contract(G_GLOBAL.k_snip_migrated, 'allowances_received', {
 						address: k_eoa.address,
 						spender: k_eoa.address,
 						page_size: 2048,
@@ -747,10 +500,10 @@ async function validate_state(b_premigrate=false) {
 	});
 
 	// override migrated contract code hash
-	k_snip_migrated = await SecretContract(P_SECRET_LCD, k_snip_original.addr, null, XC_CONTRACT_CACHE_BYPASS);
+	G_GLOBAL.k_snip_migrated = await SecretContract(P_SECRET_LCD, k_snip_original.addr, null, XC_CONTRACT_CACHE_BYPASS);
 
 	// create contract eoa
-	await ExternallyOwnedAccount.fromAddress(k_snip_migrated.addr, '$contract');
+	await ExternallyOwnedAccount.fromAddress(G_GLOBAL.k_snip_migrated.addr, '$contract');
 
 	// check balances and verify viewing keys still work
 	console.debug(`Validating post-migration state`);
@@ -758,7 +511,7 @@ async function validate_state(b_premigrate=false) {
 
 	// subscribe to notifications on all accounts
 	for(const k_eoa of a_eoas) {
-		await k_eoa.subscribe(k_snip_migrated);
+		await k_eoa.subscribe(G_GLOBAL.k_snip_migrated);
 	}
 
 	// evaluate a new program
@@ -794,13 +547,13 @@ async function validate_state(b_premigrate=false) {
 
 		---
 
-	`, k_snip_migrated);
+	`, G_GLOBAL.k_snip_migrated);
 
 	// validate
 	await validate_state(false);
 
 	// for testing batch operations
-	const k_app_migrated = SecretApp(k_wallet_a, k_snip_migrated);
+	const k_app_migrated = SecretApp(k_wallet_a, G_GLOBAL.k_snip_migrated);
 
 	// prep batch transfer from method
 	const batch_transfer_from = (
@@ -887,10 +640,10 @@ async function validate_state(b_premigrate=false) {
 
 			console.log(`Gas used for ${s_label} #${i_test++} w/ evaporation @${sg_target.endsWith('000')? sg_target.replace(/000$/, 'k'): sg_target}: ${xg_used} / ${sg_check} ${s_overage}`);
 		}
-	}
+	};
 
 	// transfer
-	await gas('transfer', (sg_target) => k_app_migrated.exec('transfer', {
+	await gas('transfer', sg_target => k_app_migrated.exec('transfer', {
 		recipient: k_wallet_b.addr,
 		amount: '1' as CwUint128,
 		// gas_target: sg_target,
@@ -902,7 +655,7 @@ async function validate_state(b_premigrate=false) {
 	]);
 
 	// transfer
-	await gas('transfer', (sg_target) => k_app_migrated.exec('transfer', {
+	await gas('transfer', sg_target => k_app_migrated.exec('transfer', {
 		recipient: k_wallet_c.addr,
 		amount: '100' as CwUint128,
 		// gas_target: sg_target,
@@ -914,7 +667,7 @@ async function validate_state(b_premigrate=false) {
 	]);
 
 	// transfer
-	await gas('transferFrom', (sg_target) => k_app_migrated.exec('transfer_from', {
+	await gas('transferFrom', sg_target => k_app_migrated.exec('transfer_from', {
 		owner: k_wallet_a.addr,
 		recipient: k_wallet_b.addr,
 		amount: '1' as CwUint128,
