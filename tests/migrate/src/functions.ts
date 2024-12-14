@@ -22,15 +22,18 @@ export function transfer_from(
 	k_recipient: ExternallyOwnedAccount,
 	xg_amount: bigint,
 	k_from?: ExternallyOwnedAccount,
-	b_batch=false
+	b_batch=false,
+	b_eventless=false
 ) {
 	const k_owner = k_from || k_sender;
 
 	// migrated
 	if(G_GLOBAL.k_snip_migrated) {
 		// init migration
-		k_owner.migrate();
-		k_recipient.migrate();
+		if(!b_eventless) {
+			k_owner.migrate();
+			k_recipient.migrate();
+		}
 
 		// create event
 		const g_event: Snip250TxEvent = {
@@ -48,8 +51,8 @@ export function transfer_from(
 		};
 
 		// add to histories
-		k_owner.push(g_event, b_batch);
-		k_recipient.push(g_event, b_batch);
+		k_owner.push(g_event, b_batch, b_eventless);
+		k_recipient.push(g_event, b_batch, b_eventless);
 
 		// *_from action
 		if(k_from) {
@@ -72,6 +75,8 @@ export function transfer_from(
 	}
 	// legacy
 	else {
+		if(!k_recipient) debugger;
+
 		// create legacy event
 		const g_event: Snip20TransferEvent = {
 			from: k_owner.address,

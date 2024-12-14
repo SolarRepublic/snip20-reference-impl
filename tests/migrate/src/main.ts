@@ -1,3 +1,5 @@
+import type {L} from 'ts-toolbelt';
+
 import type {Snip20, SecretAccAddr} from '@solar-republic/contractor';
 import type {Wallet} from '@solar-republic/neutrino';
 import type {CwUint128, WeakUintStr} from '@solar-republic/types';
@@ -10,7 +12,7 @@ import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
 import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, SecretApp} from '@solar-republic/neutrino';
 
-import {k_wallet_a, k_wallet_b, k_wallet_c, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
+import {k_wallet_a, k_wallet_b, k_wallet_c, k_wallet_d, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
 import {migrate_contract, preload_original_contract, upload_code} from './contract';
 import {bank, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
@@ -28,6 +30,9 @@ const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
 
 // preload sSCRT
 const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_a);
+
+// create contract eoa
+const k_eoa_snip = await ExternallyOwnedAccount.fromAddress(k_snip_original.addr, '$contract');
 
 
 /*
@@ -81,14 +86,82 @@ async function print_genesis_balances() {
 	// print genesis account balances
 	for(const k_eoa of a_eoas_genesis) {
 		// query balance using viewing key
-		const [g_balance_vk] = await query_secret_contract(G_GLOBAL.k_snip_migrated, 'balance', {
+		const [g_balance_vk, xc_code, s_err] = await query_secret_contract(G_GLOBAL.k_snip_migrated ?? k_snip_original, 'balance', {
 			address: k_eoa.address,
 		}, k_eoa.viewingKey);
+
+		if(!g_balance_vk) {
+			debugger;
+			throw Error(s_err);
+		}
 
 		// genesis account
 		console.log(`${k_eoa.alias} balance: ${g_balance_vk?.amount}`);
 	}
 }
+
+// transfer method
+const perform_transfer = async(
+	k_wallet: Wallet<'secret'>,
+	xg_amount: bigint,
+	k_recipient: ExternallyOwnedAccount,
+	...a_args: L.Take<Parameters<typeof transfer_from>, 3, '<-'>
+) => {
+	// create sender eoa
+	const k_sender = ExternallyOwnedAccount.at(k_wallet.addr);
+
+	// verbose
+	console.log(`${k_sender.alias}: transfer(${xg_amount}, ${k_recipient.alias})`);
+
+	// execute
+	const a_results = await SecretApp(k_wallet, G_GLOBAL.k_snip_migrated).exec('transfer', {
+		amount: `${xg_amount}` as CwUint128,
+		recipient: k_recipient.address,
+	}, 800_000n);
+
+	// update locals
+	transfer_from(k_sender, k_recipient, xg_amount, ...a_args);
+
+	// return results
+	return a_results;
+};
+
+// prep batch transfer from method
+const perform_batch_transfer_from = async(
+	a_actions: [
+		k_owner: ExternallyOwnedAccount,
+		xg_amount: bigint,
+		k_recipient: ExternallyOwnedAccount,
+		s_memo?: string,
+	][]
+) => {
+	// verbose
+	const a_out: string[] = [];
+	for(const [k_owner, xg_amount, k_recipient, s_memo] of a_actions) {
+		a_out.push(`${k_owner.alias} -> ${k_recipient.alias} .. ${xg_amount} ${s_memo? 'with memo': ''}`);
+	}
+
+	console.log(`$a batch_transfer_from:${a_out.map(s => `\n   ${s}`).join('')}`);
+
+	// execute
+	const a_results = await SecretApp(k_wallet_a, G_GLOBAL.k_snip_migrated).exec('batch_transfer_from', {
+		actions: a_actions.map(([k_owner, xg_amount, k_recipient, s_memo]) => ({
+			owner: k_owner.address,
+			amount: `${xg_amount}` as CwUint128,
+			recipient: k_recipient.address,
+			memo: s_memo,
+		})),
+	}, 800_000n);
+
+	// update locals
+	for(const [k_owner, xg_amount, k_recipient] of a_actions) {
+		transfer_from(k_eoa_a, k_recipient, xg_amount, k_owner, true);
+	}
+
+	// return results
+	return a_results;
+};
+
 
 // genesis accounts
 const a_genesis = ['$a', '$b', '$c', '$d'];
@@ -113,6 +186,9 @@ const a_eoas_numeric = await Promise.all(a_numerics.map(s => ExternallyOwnedAcco
 
 // concat all eoas
 const a_eoas = [...a_eoas_genesis, ...a_eoas_aliased, ...a_eoas_numeric];
+
+// genesis eoas
+const [k_eoa_a, k_eoa_b, k_eoa_c, k_eoa_d] = ['$a', '$b', '$c', '$d'].map(si => ExternallyOwnedAccount.at(si));
 
 // transfers
 const s_prog_xfers = `
@@ -261,11 +337,11 @@ const program = (b_premigrate: boolean) => `
 	---
 	transfer $a 2 $c
 	---
-	transfer $d 4 $a
+	transfer $d 3 $a
 	---
-	transfer $b 3 $c
+	transfer $b 4 $c
 	---
-	transfer $a 540 $c
+	transfer $a 120 $c
 `;
 
 
@@ -357,6 +433,7 @@ async function validate_state(b_premigrate=false) {
 
 		// extra event
 		if(a_canonical_xfers.length) {
+			debugger;
 			throw Error(`Suite recorded transfer event that was not found in contract`);
 		}
 
@@ -392,6 +469,7 @@ async function validate_state(b_premigrate=false) {
 
 				// not found
 				if(i_canonical < 0) {
+					debugger;
 					throw Error(`Failed to find tx event locally`);
 				}
 
@@ -484,9 +562,6 @@ async function validate_state(b_premigrate=false) {
 	const [atu8_cons_pk] = destructSecretRegistrationKey(g_reg!);
 	const k_wasm = SecretWasm(atu8_cons_pk!);
 
-	// create contract eoa
-	await ExternallyOwnedAccount.fromAddress(k_snip_original.addr, '$contract');
-
 	// determine how much uscrt each genesis account actually has
 	for(const k_eoa of a_eoas) {
 		const [g_bank] = await queryCosmosBankBalance(P_SECRET_LCD, k_eoa.address, 'uscrt');
@@ -505,7 +580,15 @@ async function validate_state(b_premigrate=false) {
 	}));
 
 	// evaluate suite on pre-migrated contract
-	await evaluate(program(true), k_snip_original);
+	await evaluate(`
+		${program(true)}
+
+		---
+
+		transfer $a 17 $contract
+		transfer $b 16 $contract
+		transfer $d 15 $contract
+	`, k_snip_original);
 
 	// validate contract state
 	await validate_state(true);
@@ -536,8 +619,12 @@ async function validate_state(b_premigrate=false) {
 	// 	xg_used_xfer = BigInt(g_meta?.gas_used ?? '0');
 	// }
 
+	// verbose
+	console.log('## Prior to migration:');
+	await print_genesis_balances();
+
 	// run migration
-	console.debug(`Running migration...`);
+	console.debug(`🏃 Running migration...`);
 	await migrate_contract(k_snip_original.addr, k_wallet_a, sg_code_id, k_wasm, sb16_codehash, {
 		refund_transfers_to_contract: true,
 	});
@@ -545,12 +632,31 @@ async function validate_state(b_premigrate=false) {
 	// override migrated contract code hash
 	G_GLOBAL.k_snip_migrated = await SecretContract(P_SECRET_LCD, k_snip_original.addr, null, __UNDEFINED, XC_CONTRACT_CACHE_BYPASS);
 
-	// create contract eoa
-	await ExternallyOwnedAccount.fromAddress(G_GLOBAL.k_snip_migrated.addr, '$contract');
+	// verbose
+	console.log('## After migration:');
+	await print_genesis_balances();
+
+	// expect those accounts to eventually have migration
+	k_eoa_a.migrate(true);
+	k_eoa_b.migrate(true);
+	k_eoa_d.migrate(true);
+
+	// expect genesis accounts to be refunded
+	transfer_from(k_eoa_snip, k_eoa_a, 17n, __UNDEFINED, false, true);
+	transfer_from(k_eoa_snip, k_eoa_b, 16n, __UNDEFINED, false, true);
+	transfer_from(k_eoa_snip, k_eoa_d, 15n, __UNDEFINED, false, true);
+
+	// execute some transfers out in order to settle dwb entries
+	await perform_transfer(k_wallet_a, 0n, k_eoa_b, __UNDEFINED, false, true);
+	await perform_transfer(k_wallet_b, 0n, k_eoa_d, __UNDEFINED, false, true);
+	await perform_transfer(k_wallet_d, 0n, k_eoa_a, __UNDEFINED, false, true);
 
 	// check balances and verify viewing keys still work
 	console.debug(`Validating post-migration state`);
 	await validate_state(false);
+
+	// expect c to eventually have a migration event
+	k_eoa_c.migrate(true);
 
 	// subscribe to notifications on all accounts
 	for(const k_eoa of a_eoas) {
@@ -580,6 +686,8 @@ async function validate_state(b_premigrate=false) {
 		increaseAllowance $c 100 $a
 		increaseAllowance $d 10 $a
 
+		transfer $a 10 $contract  **fail cannot be sent
+
 		---
 
 		transferFrom Carol 2 Alice David
@@ -596,74 +704,6 @@ async function validate_state(b_premigrate=false) {
 
 	// validate
 	await validate_state(false);
-
-	// for testing batch operations
-	const k_app_migrated = SecretApp(k_wallet_a, G_GLOBAL.k_snip_migrated);
-
-
-	// prep batch transfer from method
-	const perform_transfer = async(
-		k_wallet: Wallet<'secret'>,
-		xg_amount: bigint,
-		k_recipient: ExternallyOwnedAccount
-	) => {
-		// create sender eoa
-		const k_sender = ExternallyOwnedAccount.at(k_wallet.addr);
-
-		// verbose
-		console.log(`${k_sender.alias}: transfer(${xg_amount}, ${k_recipient.alias})`);
-
-		// execute
-		const a_results = await SecretApp(k_wallet, G_GLOBAL.k_snip_migrated).exec('transfer', {
-			amount: `${xg_amount}` as CwUint128,
-			recipient: k_recipient.address,
-		}, 800_000n);
-
-		// update locals
-		transfer_from(k_sender, k_recipient, xg_amount);
-
-		// return results
-		return a_results;
-	};
-
-	// prep batch transfer from method
-	const perform_batch_transfer_from = async(
-		a_actions: [
-			k_owner: ExternallyOwnedAccount,
-			xg_amount: bigint,
-			k_recipient: ExternallyOwnedAccount,
-			s_memo?: string,
-		][]
-	) => {
-		// verbose
-		const a_out: string[] = [];
-		for(const [k_owner, xg_amount, k_recipient, s_memo] of a_actions) {
-			a_out.push(`${k_owner.alias} -> ${k_recipient.alias} .. ${xg_amount} ${s_memo? 'with memo': ''}`);
-		}
-
-		console.log(`$a batch_transfer_from:${a_out.map(s => `\n   ${s}`).join('')}`);
-
-		// execute
-		const a_results = await k_app_migrated.exec('batch_transfer_from', {
-			actions: a_actions.map(([k_owner, xg_amount, k_recipient, s_memo]) => ({
-				owner: k_owner.address,
-				amount: `${xg_amount}` as CwUint128,
-				recipient: k_recipient.address,
-				memo: s_memo,
-			})),
-		}, 800_000n);
-
-		// update locals
-		for(const [k_owner, xg_amount, k_recipient] of a_actions) {
-			transfer_from(k_eoa_a, k_recipient, xg_amount, k_owner, true);
-		}
-
-		// return results
-		return a_results;
-	};
-
-	// genesis eoas
-	const [k_eoa_a, k_eoa_b, k_eoa_c, k_eoa_d] = ['$a', '$b', '$c', '$d'].map(si => ExternallyOwnedAccount.at(si));
 
 	// make sure the balance queries are working
 	await perform_transfer(k_wallet_a, 1n, k_eoa_b);

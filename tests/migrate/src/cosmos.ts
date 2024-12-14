@@ -22,7 +22,6 @@ export function bank(k_eoa: ExternallyOwnedAccount, xg_amount: bigint): void {
 
 	// cannot be negative
 	if(k_eoa.bank < 0n) {
-		debugger;
 		throw Error(`Unexpected negative bank ${k_eoa.bank} when modifying with ${xg_amount} on ${k_eoa.alias || k_eoa.address}`);
 	}
 }

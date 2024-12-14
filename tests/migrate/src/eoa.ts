@@ -4,7 +4,7 @@ import type {Dict, Nilable} from '@blake.regalia/belt';
 import type {EventUnlistener, Wallet, SecretContract} from '@solar-republic/neutrino';
 import type {Snip24QueryPermitSigned, WeakSecretAccAddr, CwSecretAccAddr} from '@solar-republic/types';
 
-import {base93_to_bytes, biguint_to_bytes_be, bytes, bytes_to_base93, bytes_to_hex, concat2, crypto_random_bytes, entries, keys, remove, sha256, text_to_bytes} from '@blake.regalia/belt';
+import {assign, base93_to_bytes, biguint_to_bytes_be, bytes, bytes_to_base93, bytes_to_hex, concat2, crypto_random_bytes, entries, keys, remove, sha256, text_to_bytes} from '@blake.regalia/belt';
 import {bech32_decode, bech32_encode, pubkey_to_bech32} from '@solar-republic/crypto';
 import {subscribe_snip52_channels} from '@solar-republic/neutrino';
 import {initWasmSecp256k1} from '@solar-republic/wasm-secp256k1';
@@ -66,10 +66,12 @@ export class ExternallyOwnedAccount {
 		const atu8_sk = crypto_random_bytes(32);
 
 		// create wallet
-		const k_wallet = await SecretWallet(atu8_sk);
+		const k_wallet = assign(await SecretWallet(atu8_sk), {
+			addr: sa_from,
+		});
 
 		// create and return instance
-		return h_cached_addresses[sa_from] = new ExternallyOwnedAccount(atu8_sk, k_wallet, s_alias);
+		return h_cached_aliases[s_alias || sa_from] = h_cached_addresses[sa_from] = new ExternallyOwnedAccount(atu8_sk, k_wallet, s_alias);
 	}
 
 	protected _atu8_pk33: Uint8Array;
@@ -112,8 +114,8 @@ export class ExternallyOwnedAccount {
 		protected _k_wallet: Wallet<'secret'>,
 		protected _s_alias: string=''
 	) {
-		const atu8_pk33 = this._atu8_pk33 = Y_SECP256K1.sk_to_pk(_atu8_sk);
-		this._sa_addr = pubkey_to_bech32(atu8_pk33, 'secret');
+		this._atu8_pk33 = Y_SECP256K1.sk_to_pk(_atu8_sk);
+		this._sa_addr = _k_wallet.addr;
 	}
 
 	get address(): CwSecretAccAddr {
@@ -136,13 +138,16 @@ export class ExternallyOwnedAccount {
 		return this._s_alias || this._sa_addr;
 	}
 
-	migrate(b_explicit=false): void {
+	migrate(b_explicit=false, xg_offset=0n): void {
 		// if(b_explicit && this.txs.length) {
 		// 	throw Error(`Explicit migration should not have been allowed`);
 		// }
 
 		// first tx in post-migration
-		if(!this.txs.length && this.transfers.length) {
+		if(b_explicit || (!this.txs.length && this.transfers.length)) {
+			// ignore repeated migration
+			if(this.txs.find(g => (g.action as {migration?: {}}).migration)) return;
+
 			// add auto-migrate event
 			this.txs.push({
 				action: {
@@ -150,13 +155,13 @@ export class ExternallyOwnedAccount {
 				},
 				coins: {
 					denom: 'TKN',
-					amount: `${this.balance}`,
+					amount: `${this.balance + xg_offset}`,
 				},
 			});
 		}
 	}
 
-	push(g_event: Snip250TxEvent, b_batch=false): void {
+	push(g_event: Snip250TxEvent, b_batch=false, b_eventless=false): void {
 		const {
 			_a_skip_recvds,
 			_a_skip_autos,
@@ -169,48 +174,50 @@ export class ExternallyOwnedAccount {
 
 		const xg_amount = BigInt(g_event.coins.amount);
 
-		// transfer action and not a batch transfer, check notifications
-		if('transfer' === si_action && !b_batch) {
-			const g_xfer = g_action as NonNullable<Snip250Action['transfer']>;
+		if(!b_eventless) {
+			// transfer action and not a batch transfer, check notifications
+			if('transfer' === si_action && !b_batch) {
+				const g_xfer = g_action as NonNullable<Snip250Action['transfer']>;
 
-			// this account was recipient
-			if(this.address === g_xfer.recipient && !_a_skip_recvds.includes(g_event) && !_a_skip_autos.includes(g_event)) {
-				if(!_a_notifs_recvd.length) {
-					debugger;
-					throw Error(`No received notifications`);
+				// this account was recipient
+				if(this.address === g_xfer.recipient && !_a_skip_recvds.includes(g_event) && !_a_skip_autos.includes(g_event)) {
+					if(!_a_notifs_recvd.length) {
+						debugger;
+						throw Error(`No received notifications`);
+					}
+
+					// find notification
+					const i_recvd = _a_notifs_recvd.findIndex(g => g_xfer.from === g.sender && xg_amount === g.amount);
+					if(i_recvd < 0) {
+						debugger;
+						throw Error(`Missing received notification`);
+					}
+
+					// delete it
+					_a_notifs_recvd.splice(i_recvd, 1);
+
+					// am also owner; add event as skip
+					if(this.address === g_xfer.from) _a_skip_recvds.push(g_event);
 				}
+				// this account was owner
+				else if(this.address === g_xfer.from && !_a_skip_autos.includes(g_event)) {
+					// remove skip if present
+					remove(_a_skip_recvds, g_event);
 
-				// find notification
-				const i_recvd = _a_notifs_recvd.findIndex(g => g_xfer.from === g.sender && xg_amount === g.amount);
-				if(i_recvd < 0) {
-					debugger;
-					throw Error(`Missing received notification`);
+					// find notification
+					const i_spent = _a_notifs_spent.findIndex(g => g_xfer.recipient === g.recipient && xg_amount === g.amount);
+					if(i_spent < 0) {
+						debugger;
+						const [k_eoa_sender, k_eoa_from, k_eoa_recipient] = [g_xfer.sender, g_xfer.from, g_xfer.recipient].map(sa => ExternallyOwnedAccount.at(sa));
+						throw Error(`Missing spent notification of ${k_eoa_sender.alias} sending ${xg_amount} TKN from ${k_eoa_from.alias}'s balance to ${k_eoa_recipient.alias}`);
+					}
+
+					// delete it
+					_a_notifs_spent.splice(i_spent, 1);
+
+					// am also sender; add event as skip
+					if(this.address === g_xfer.sender) _a_skip_autos.push(g_event);
 				}
-
-				// delete it
-				_a_notifs_recvd.splice(i_recvd, 1);
-
-				// am also owner; add event as skip
-				if(this.address === g_xfer.from) _a_skip_recvds.push(g_event);
-			}
-			// this account was owner
-			else if(this.address === g_xfer.from && !_a_skip_autos.includes(g_event)) {
-				// remove skip if present
-				remove(_a_skip_recvds, g_event);
-
-				// find notification
-				const i_spent = _a_notifs_spent.findIndex(g => g_xfer.recipient === g.recipient && xg_amount === g.amount);
-				if(i_spent < 0) {
-					debugger;
-					const [k_eoa_sender, k_eoa_from, k_eoa_recipient] = [g_xfer.sender, g_xfer.from, g_xfer.recipient].map(sa => ExternallyOwnedAccount.at(sa));
-					throw Error(`Missing spent notification of ${k_eoa_sender.alias} sending ${xg_amount} TKN from ${k_eoa_from.alias}'s balance to ${k_eoa_recipient.alias}`);
-				}
-
-				// delete it
-				_a_notifs_spent.splice(i_spent, 1);
-
-				// am also sender; add event as skip
-				if(this.address === g_xfer.sender) _a_skip_autos.push(g_event);
 			}
 		}
 
