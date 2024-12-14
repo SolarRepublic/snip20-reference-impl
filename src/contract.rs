@@ -158,21 +158,33 @@ pub fn migrate(
 
     if msg.refund_transfers_to_contract {
         let contract_canonical = deps.api.addr_canonicalize(env.contract.address.as_str())?;
+
+        // get all old transfers that sent to this contract
         let txs = get_all_old_transfers(
             deps.api, 
             deps.storage, 
             &contract_canonical
         )?;
+
+        // get this contract's old balance
         let balance = get_old_balance(
             deps.storage, 
             &contract_canonical,
         ).unwrap_or_default();
+
+        // track the sum of received tokens
         let mut receive_sum = 0;
 
         let mut rng = ContractPrng::new(rng_seed.0.as_slice(), &sha_256(&constants.prng_seed));
+
+        // each old transfer
         for tx in txs {
+            // this contract was the recipient
             if tx.receiver == env.contract.address {
+                // retrieve the owner who lost tokens
                 let original_owner = deps.api.addr_canonicalize(tx.from.as_str())?;
+
+                // transfer back to them
                 perform_transfer(
                     deps.storage,
                     &mut rng,
@@ -187,6 +199,8 @@ pub fn migrate(
                     &mut tracker,
                     false,
                 )?;
+
+                // add to sum of received
                 receive_sum += tx.coins.amount.u128();
             }
         }
