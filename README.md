@@ -160,3 +160,9 @@ Direct channels:
 Group channels:
  - `multirecvd` -- emitted to a group of recipients (up to 16) when a `batch_transfer`, `batch_send`, `batch_transfer_from`, or `batch_send_from` has been executed. Each recipient will receive a packet of data containing the amount they received, the last 8 bytes of the owner's address, and some additional metadata.
  - `multispent` -- emitted to a group of spenders (up to 16) when a `batch_transfer_from`, or `batch_send_from` has been executed. Each spender will receive a packet of data containing the amount that was spent, the last 8 bytes of the recipient's address, and some additional metadata.
+
+
+## Security Features
+
+ - Transfers to the contract itself will be rejected to prevent accidental loss of funds.
+ - The migration allows for a one-time processing of refunding any previous transfers made to the contract itself.
