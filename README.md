@@ -1,6 +1,6 @@
 # sSCRT v2 migration contract
 
-This contract is migrates the original sSCRT SNIP-20 contract to version 2.0
+This contract migrates the original sSCRT SNIP-20 contract to version 2.0.
 
 **Original mainnet code id:** `5`
 
