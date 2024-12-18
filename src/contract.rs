@@ -558,7 +558,7 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             txhash,
             deps.api.addr_canonicalize(account.as_str())?,
         ),
-        QueryWithPermit::ListPermitRevocations {  } => {
+        QueryWithPermit::ListPermitRevocations { .. } => {
             if !permit.check_permission(&TokenPermissions::Owner) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query list permit revocations, got permissions {:?}",
@@ -634,7 +634,7 @@ pub fn viewing_keys_queries(deps: Deps, env: Env,  msg: QueryMsg) -> StdResult<B
                     txhash,
                     deps.api.addr_canonicalize(viewer.address.as_str())?,
                 ),
-                QueryMsg::ListPermitRevocations { viewer } => query_list_permit_revocations(deps, viewer.address.as_str()),
+                QueryMsg::ListPermitRevocations{viewer, .. } => query_list_permit_revocations(deps, viewer.address.as_str()),
                 QueryMsg::LegacyTransferHistory { 
                     address, 
                     page, 
