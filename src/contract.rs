@@ -3334,11 +3334,11 @@ fn revoke_all_permits(deps: DepsMut, info: MessageInfo, interval: AllRevokedInte
     })?))
 }
 
-fn delete_permit_revocation(deps: DepsMut, info: MessageInfo, revocation_id: Uint64) -> StdResult<Response> {
+fn delete_permit_revocation(deps: DepsMut, info: MessageInfo, revocation_id: String) -> StdResult<Response> {
     RevokedPermits::delete_revocation(
         deps.storage,
         info.sender.as_str(),
-        revocation_id,
+        revocation_id.as_str(),
     )?;
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::DeletePermitRevocation { 

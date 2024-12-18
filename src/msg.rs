@@ -316,7 +316,7 @@ pub enum ExecuteMsg {
 
     /// Deletes a previously issued permit revocation.
     DeletePermitRevocation {
-        revocation_id: Uint64,
+        revocation_id: String,
         #[cfg(feature = "gas_evaporation")]
         gas_target: Option<Uint64>,
     },
