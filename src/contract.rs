@@ -1,15 +1,14 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg,
-    Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128, Uint64,
+    entry_point, to_binary, Addr, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Timestamp, Uint128, Uint64
 };
 #[cfg(feature = "gas_evaporation")]
 use cosmwasm_std::Api;
 use rand_chacha::ChaChaRng;
 use rand_core::{RngCore, SeedableRng};
 use secret_toolkit::notification::{get_seed, notification_id, BloomParameters, ChannelInfoData, Descriptor, FlatDescriptor, GroupChannel, Notification, DirectChannel, StructDescriptor};
-use secret_toolkit::permit::{Permit, RevokedPermits, TokenPermissions};
+use secret_toolkit::permit::{AllRevokedInterval, Permit, RevokedPermits, RevokedPermitsStore, TokenPermissions};
 use secret_toolkit::utils::{pad_handle_result, pad_query_result};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{hkdf_sha_256, sha_256, ContractPrng};
@@ -48,7 +47,6 @@ use crate::transaction_history::{
 /// We make sure that responses from `handle` are padded to a multiple of this size.
 pub const RESPONSE_BLOCK_SIZE: usize = 256;
 pub const NOTIFICATION_BLOCK_SIZE: usize = 1;
-pub const PREFIX_REVOKED_PERMITS: &str = "revoked_permits";
 
 #[entry_point]
 pub fn migrate(
@@ -363,6 +361,8 @@ pub fn execute(deps: DepsMut, env: Env, info: MessageInfo, msg: ExecuteMsg) -> S
         ExecuteMsg::RemoveMinters { minters, .. } => remove_minters(deps, info, minters),
         ExecuteMsg::SetMinters { minters, .. } => set_minters(deps, info, minters),
         ExecuteMsg::RevokePermit { permit_name, .. } => revoke_permit(deps, info, permit_name),
+        ExecuteMsg::RevokeAllPermits { interval, .. } => revoke_all_permits(deps, info, interval),
+        ExecuteMsg::DeletePermitRevocation { revocation_id, .. } => delete_permit_revocation(deps, info, revocation_id),
         ExecuteMsg::AddSupportedDenoms { denoms, .. } => add_supported_denoms(deps, info, denoms),
         ExecuteMsg::RemoveSupportedDenoms { denoms, .. } => {
             remove_supported_denoms(deps, info, denoms)
@@ -459,7 +459,7 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
 
     let account = secret_toolkit::permit::validate(
         deps,
-        PREFIX_REVOKED_PERMITS,
+        &env,
         &permit,
         token_address.into_string(),
         None,
@@ -558,6 +558,15 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             txhash,
             deps.api.addr_canonicalize(account.as_str())?,
         ),
+        QueryWithPermit::ListPermitRevocations {  } => {
+            if !permit.check_permission(&TokenPermissions::Owner) {
+                return Err(StdError::generic_err(format!(
+                    "No permission to query list permit revocations, got permissions {:?}",
+                    permit.params.permissions
+                )));
+            } 
+            query_list_permit_revocations(deps, account.as_str()) 
+        },
         QueryWithPermit::LegacyTransferHistory { page, page_size } => {
             if !permit.check_permission(&TokenPermissions::History) {
                 return Err(StdError::generic_err(format!(
@@ -625,6 +634,7 @@ pub fn viewing_keys_queries(deps: Deps, env: Env,  msg: QueryMsg) -> StdResult<B
                     txhash,
                     deps.api.addr_canonicalize(viewer.address.as_str())?,
                 ),
+                QueryMsg::ListPermitRevocations { viewer } => query_list_permit_revocations(deps, viewer.address.as_str()),
                 QueryMsg::LegacyTransferHistory { 
                     address, 
                     page, 
@@ -3302,13 +3312,50 @@ fn perform_deposit(
 fn revoke_permit(deps: DepsMut, info: MessageInfo, permit_name: String) -> StdResult<Response> {
     RevokedPermits::revoke_permit(
         deps.storage,
-        PREFIX_REVOKED_PERMITS,
         info.sender.as_str(),
         &permit_name,
     );
 
     Ok(Response::new().set_data(to_binary(&ExecuteAnswer::RevokePermit { status: Success })?))
 }
+
+// SNIP 24.1
+
+fn revoke_all_permits(deps: DepsMut, info: MessageInfo, interval: AllRevokedInterval) -> StdResult<Response> {
+    let revocation_id = RevokedPermits::revoke_all_permits(
+        deps.storage,
+        info.sender.as_str(),
+        &interval,
+    )?;
+
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::RevokeAllPermits { 
+        status: Success,
+        revocation_id: Some(revocation_id.to_string()),
+    })?))
+}
+
+fn delete_permit_revocation(deps: DepsMut, info: MessageInfo, revocation_id: Uint64) -> StdResult<Response> {
+    RevokedPermits::delete_revocation(
+        deps.storage,
+        info.sender.as_str(),
+        revocation_id,
+    )?;
+
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::DeletePermitRevocation { 
+        status: Success,
+    })?))
+}
+
+fn query_list_permit_revocations(deps: Deps, account: &str) -> StdResult<Binary> {
+    let revocations = RevokedPermits::list_revocations(
+        deps.storage, 
+        account
+    )?;
+
+    to_binary(&QueryAnswer::ListPermitRevocations { revocations })
+}
+
+// end SNIP 24.1
 
 fn check_if_admin(config_admin: &Addr, account: &Addr) -> StdResult<()> {
     if config_admin != account {
@@ -4590,6 +4637,8 @@ mod tests {
                 permit_name: permit_name.to_string(),
                 chain_id: chain_id.to_string(),
                 permissions: vec![permit_type],
+                created: None,
+                expires: None,
             },
             signature: PermitSignature {
                 pub_key: PubKey {

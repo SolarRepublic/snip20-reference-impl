@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{batch, legacy_state, legacy_viewing_key, transaction_history::Tx};
 use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Uint64};
-use secret_toolkit::{notification::ChannelInfoData, permit::Permit};
+use secret_toolkit::{notification::ChannelInfoData, permit::{AllRevocation, AllRevokedInterval, Permit}};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct MigrateMsg {
@@ -301,6 +301,26 @@ pub enum ExecuteMsg {
         padding: Option<String>,
     },
 
+    // SNIP 24.1 Blanket Permits
+
+    /// Revokes all permits. Client can supply a datetime for created_after, created_before, both, or neither.
+    /// * created_before – makes it so any permits using a created value less than this datetime will be rejected
+    /// * created_after – makes it so any permits using a created value greater than this datetime will be rejected
+    /// * both created_before and created_after – makes it so any permits using a created value between these two datetimes will be rejected
+    /// * neither – makes it so ANY permit will be rejected. in this case, the contract MUST return a revocation ID of "REVOKED_ALL". this action is idempotent
+    RevokeAllPermits {
+        interval: AllRevokedInterval,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+    },
+
+    /// Deletes a previously issued permit revocation.
+    DeletePermitRevocation {
+        revocation_id: Uint64,
+        #[cfg(feature = "gas_evaporation")]
+        gas_target: Option<Uint64>,
+    },
+
     // Migration
     MigrateLegacyAccount {
         #[cfg(feature = "gas_evaporation")]
@@ -415,6 +435,16 @@ pub enum ExecuteAnswer {
         status: ResponseStatus,
     },
 
+    // SNIP 24.1
+    RevokeAllPermits {
+        status: ResponseStatus,
+        revocation_id: Option<String>,
+    },
+
+    DeletePermitRevocation {
+        status: ResponseStatus,
+    },
+
     // Migrate
     MigrateLegacyAccount {
         status: ResponseStatus,
@@ -459,7 +489,9 @@ impl Evaporator for ExecuteMsg {
             | ExecuteMsg::RemoveSupportedDenoms { gas_target, .. }
             | ExecuteMsg::MigrateLegacyAccount { gas_target, .. }
             | ExecuteMsg::SetNotificationStatus { gas_target, .. }
-            | ExecuteMsg::RevokePermit { gas_target, .. } => match gas_target {
+            | ExecuteMsg::RevokePermit { gas_target, .. } 
+            | ExecuteMsg::RevokeAllPermits { gas_target, .. } 
+            | ExecuteMsg::DeletePermitRevocation { gas_target, .. } => match gas_target {
                 Some(gas_target) => {
                     let gas_used = api.check_gas()?;
                     if gas_used < gas_target.u64() {
@@ -542,6 +574,11 @@ pub enum QueryMsg {
         query: QueryWithPermit,
     },
 
+    // SNIP 24.1
+    ListPermitRevocations {
+        viewer: ViewerInfo,
+    },
+
     // for debug purposes only
     #[cfg(feature = "gas_tracking")]
     Dwb {},
@@ -598,6 +635,10 @@ impl QueryMsg {
                 let address = api.addr_validate(address.as_str())?;
                 Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
             }
+            Self::ListPermitRevocations { viewer, .. } => {
+                let address = api.addr_validate(viewer.address.as_str())?;
+                Ok((vec![address], legacy_viewing_key::ViewingKey(viewer.viewing_key.clone())))
+            }
             _ => panic!("This query type does not require authentication"),
         }
     }
@@ -640,6 +681,8 @@ pub enum QueryWithPermit {
         page: Option<u32>,
         page_size: u32,
     },
+    // SNIP 24.1
+    ListPermitRevocations { },
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug)]
@@ -706,6 +749,11 @@ pub enum QueryAnswer {
         /// shared secret in base64
         seed: Binary,
         channels: Vec<ChannelInfoData>,
+    },
+
+    // SNIP 24.1
+    ListPermitRevocations {
+        revocations: Vec<AllRevocation>,
     },
 
     // Pre-DWB history
