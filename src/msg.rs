@@ -576,7 +576,7 @@ pub enum QueryMsg {
 
     // SNIP 24.1
     ListPermitRevocations {
-        // `page` and `page_size`` do nothing here because max revocations is only 10 but included
+        // `page` and `page_size` do nothing here because max revocations is only 10 but included
         // to satisfy the SNIP24.1 spec
         page: Option<u32>,
         page_size: Option<u32>,
@@ -687,7 +687,7 @@ pub enum QueryWithPermit {
     },
     // SNIP 24.1
     ListPermitRevocations { 
-        // `page` and `page_size`` do nothing here because max revocations is only 10 but included
+        // `page` and `page_size` do nothing here because max revocations is only 10 but included
         // to satisfy the SNIP24.1 spec
         page: Option<u32>,
         page_size: Option<u32>,
