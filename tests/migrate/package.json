@@ -4,7 +4,11 @@
   "scripts": {
     "make": "pushd ../../ && make compile-integration && popd",
     "build": "tsc && tsc-esm-fix --tsconfig tsconfig.tsc-esm-fix.json --target=dist",
-    "test": "pnpm run make && pnpm run build && NODE_ENV=development node --env-file=.env run dist/main.js"
+    "simulate": "pnpm run build && NODE_ENV=development node --env-file=.env dist/main.js",
+    "test": "pnpm run make && pnpm run simulate"
+  },
+  "engine": {
+    "node": ">=22.4.0"
   },
   "devDependencies": {
     "@blake.regalia/belt": "^0.47.2",
