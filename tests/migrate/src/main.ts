@@ -10,10 +10,10 @@ import {__UNDEFINED, canonicalize_json, keys, MutexPool, stringify_json} from '@
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
-import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, sign_secret_query_permit, SecretApp} from '@solar-republic/neutrino';
+import {SecretContract, XC_CONTRACT_CACHE_BYPASS, query_secret_contract, SecretWasm, SecretApp, snip24_amino_sign, secret_contract_upload_code} from '@solar-republic/neutrino';
 
 import {k_wallet_a, k_wallet_b, k_wallet_c, k_wallet_d, P_SECRET_LCD, SR_LOCAL_WASM} from './constants';
-import {migrate_contract, preload_original_contract, upload_code} from './contract';
+import {migrate_contract, preload_original_contract} from './contract';
 import {bank, bank_send} from './cosmos';
 import {ExternallyOwnedAccount} from './eoa';
 import {Evaluator} from './evaluator';
@@ -22,11 +22,9 @@ import {G_GLOBAL} from './global';
 import {Parser} from './parser';
 import {test_dwb} from './test-dwb';
 
-const a_argv = process.argv.slice(2);
 
 // mainnet contract token address
 const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
-
 
 // preload sSCRT
 const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_a);
@@ -554,7 +552,12 @@ async function validate_state(b_premigrate=false) {
 
 	// upload code to chain
 	console.debug(`Uploading code...`);
-	const [sg_code_id, sb16_codehash] = await upload_code(k_wallet_a, atu8_wasm);
+	const [sg_code_id, sb16_codehash, [, s_err]=[]] = await secret_contract_upload_code(k_wallet_a, atu8_wasm, 30_000000n);
+
+	// upload failed
+	if(!sg_code_id) {
+		throw Error(s_err);
+	}
 
 	// prepare migration message
 	console.debug('Encoding migration message...');
@@ -576,7 +579,7 @@ async function validate_state(b_premigrate=false) {
 
 	// sign query permit for all accounts
 	await Promise.all(a_eoas.map(async(k_eoa) => {
-		k_eoa.queryPermit = await sign_secret_query_permit(k_eoa.wallet, 'balance', [k_snip_original.addr], ['owner', 'balance']);
+		k_eoa.queryPermit = await snip24_amino_sign(k_eoa.wallet, 'balance', [k_snip_original.addr], ['owner', 'balance']);
 	}));
 
 	// evaluate suite on pre-migrated contract
@@ -769,7 +772,7 @@ async function validate_state(b_premigrate=false) {
 		let i_test = 1;
 
 		for(const sg_target of a_targets) {
-			const [, xc_code,, g_meta, h_events] = await f_exec(sg_target);
+			const [w_result, a2_result, [xc_code,,, g_meta, h_events]] = await f_exec(sg_target);
 
 			if(xc_code) throw Error(`Gas used comparison test failed`);
 

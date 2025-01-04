@@ -1,5 +1,5 @@
 import type {JsonObject, Dict} from '@blake.regalia/belt';
-import type {TxMeta, SecretContract, TxResultTuple} from '@solar-republic/neutrino';
+import type {TxMeta, SecretContract, TxResponseTuple} from '@solar-republic/neutrino';
 import type {CwUint128} from '@solar-republic/types';
 
 import {sha256, text_to_bytes, bigint_greater} from '@blake.regalia/belt';
@@ -110,7 +110,7 @@ export async function test_dwb(
 		let k_checker: GasChecker | null = null;
 
 		// grant action from previous simultion
-		let f_grant: undefined | (() => Promise<[w_result: JsonObject | undefined, xc_code: number, s_response: string, g_meta: TxMeta | undefined, h_events: Dict<string[]> | undefined, si_txn: string | undefined]>);
+		let f_grant: undefined | (() => Promise<[w_result: JsonObject | undefined, a2_result?: any, a6_response?: TxResponseTuple]>);
 
 		// number of simulations to perform
 		const N_SIMULATIONS = 1025;
@@ -141,7 +141,7 @@ export async function test_dwb(
 			const [
 				g_result_transfer,
 				[xc_send_gas, s_err_send_gas],
-				a_res_increase,
+				[g_res_increase,, [xc_code, s_err]=[]]=[],,
 			] = await Promise.all([
 				// #ts-expect-error secret app
 				transfer(k_dwbv, i_sim % 2? 1_000000n: 2_000000n, k_app_a, k_app_sim, k_checker),
@@ -155,8 +155,9 @@ export async function test_dwb(
 			}
 
 			// increase allowance error
-			if(f_grant && a_res_increase?.[1]) {
-				throw Error(`Failed to increase allowance: ${a_res_increase[2]}`);
+			if(f_grant && xc_code) {
+				debugger;
+				throw Error(`Failed to increase allowance: ${s_err}`);
 			}
 
 			// approve Alec as spender for future txs

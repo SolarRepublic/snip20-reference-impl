@@ -2,12 +2,12 @@ import type {DwbValidator} from './dwb';
 import type {GasChecker} from './gas-checker';
 import type {Dict, Nilable} from '@blake.regalia/belt';
 import type {SecretContractInterface} from '@solar-republic/contractor';
-import type {SecretApp} from '@solar-republic/neutrino';
+import {snip24_amino_sign, type SecretApp} from '@solar-republic/neutrino';
 import type {CwUint128, Snip24QueryPermitSigned, WeakSecretAccAddr} from '@solar-republic/types';
 
 import {entries, stringify_json} from '@blake.regalia/belt';
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
-import {sign_secret_query_permit} from '@solar-republic/neutrino';
+
 import BigNumber from 'bignumber.js';
 
 import {H_ADDRS, N_DECIMALS, P_SECRET_LCD} from './constants';
@@ -60,7 +60,7 @@ export async function scrt_balance(sa_owner: WeakSecretAccAddr): Promise<bigint>
 }
 
 export async function snip_balance(k_app: SecretApp<TokenBalance>) {
-	const g_permit = await sign_secret_query_permit(k_app.wallet, 'snip-balance', [k_app.contract.addr], ['balance']);
+	const g_permit = await snip24_amino_sign(k_app.wallet, 'snip-balance', [k_app.contract.addr], ['balance']);
 	return await k_app.query('balance', {}, g_permit as unknown as null);
 }
 
@@ -89,7 +89,7 @@ export async function transfer(
 	]);
 
 	// execute transfer
-	const [g_exec, xc_code, sx_res, g_meta, h_events, si_txn] = k_app_sender
+	const [g_exec,, [xc_code, sx_res,, g_meta, h_events]] = k_app_sender
 		? await k_app_sender.exec('transfer_from', {
 			owner: k_app_owner.wallet.addr,
 			amount: `${xg_amount}` as CwUint128,

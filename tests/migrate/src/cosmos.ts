@@ -59,7 +59,7 @@ export async function bank_send(k_sender: ExternallyOwnedAccount, xg_amount: big
 	bank(k_sender, -BigInt(k_sender.wallet.fees!(sg_limit)[0][0]));
 
 	// broadcast to chain
-	const [xc_code, sx_res, g_meta, atu8_data, h_events] = await broadcast_result(k_sender.wallet, atu8_raw, si_txn, K_TEF_LOCAL);
+	const [xc_code, sx_res,, g_meta, atu8_data, h_events] = await broadcast_result(k_sender.wallet, atu8_raw, si_txn, K_TEF_LOCAL);
 
 	// failed
 	if(xc_code) {

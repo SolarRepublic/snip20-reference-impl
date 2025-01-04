@@ -1,11 +1,11 @@
 import type {Parser, Statement} from './parser';
 import type {ParseSignatureString} from './types';
 import type {EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
-import type {SecretContract, TxResultTuple} from '@solar-republic/neutrino';
+import type {SecretContract, TxResponseTuple} from '@solar-republic/neutrino';
 import type {WeakSecretAccAddr, CwSecretAccAddr} from '@solar-republic/types';
 
 import {__UNDEFINED, bigint_abs, F_IDENTITY, is_bigint, is_number, is_undefined, keys, snake, text_to_base64, transform_values, type Dict, type JsonObject, type Promisable} from '@blake.regalia/belt';
-import {broadcast_result, create_and_sign_tx_direct, secret_contract_responses_decrypt} from '@solar-republic/neutrino';
+import {broadcast_result, create_and_sign_tx_direct, secret_response_decrypt} from '@solar-republic/neutrino';
 
 import {K_TEF_LOCAL} from './contract';
 import {bank} from './cosmos';
@@ -17,7 +17,7 @@ type WithArgs<a_extra extends Array<any>, w_return=void> = (k_sender: Externally
 
 type Handler = {
 	params: string;
-	handler: WithArgs<[JsonObject, TxResultTuple]>;
+	handler: WithArgs<[JsonObject, TxResponseTuple]>;
 	before?: WithArgs<[], {
 		funds: bigint;
 	}> | undefined;
@@ -31,7 +31,7 @@ export function handler<s_signature extends string>(
 			sender: WeakSecretAccAddr;
 		},
 		g_answer: ParseSignatureString<s_signature>['return'],
-		a_results: TxResultTuple,
+		a_results: TxResponseTuple,
 	) => void,
 	g_hooks?: {
 		before?: (k_eoa: ExternallyOwnedAccount, g_args: ParseSignatureString<s_signature>['args'] & {
@@ -78,7 +78,7 @@ export class Evaluator {
 			},
 			g_operation: Statement['value'],
 		][],
-		(a_tuple: TxResultTuple, a_msgs: [EncodedGoogleProtobufAny, Uint8Array, {
+		(a_tuple: TxResponseTuple, a_msgs: [EncodedGoogleProtobufAny, Uint8Array, {
 			sender: WeakSecretAccAddr;
 		}, Statement['value']][]) => Promisable<void>,
 	]>();
@@ -230,12 +230,12 @@ export class Evaluator {
 				}
 
 				// set entry in pending
-				_hm_pending.set(k_eoa, [[[atu8_exec, atu8_nonce, g_args_sim, g_statement]], async(a_results, a_execs) => {
+				_hm_pending.set(k_eoa, [[[atu8_exec, atu8_nonce, g_args_sim, g_statement]], async(a6_response, a_execs) => {
 					// detuple results
-					const [xc_code, sx_res, g_meta, atu8_data, h_events] = a_results;
+					const [xc_code, sx_res,, g_meta, h_events, atu8_data] = a6_response;
 
 					// decrypt response from contract
-					const [a_error, a_responses] = await secret_contract_responses_decrypt(k_snip, [xc_code, sx_res, g_meta, atu8_data], a_execs.map(([, atu8]) => atu8));
+					const [a_error, a_responses] = await secret_response_decrypt(k_snip.wasm, a6_response, a_execs.map(([, atu8]) => atu8));
 
 					// failed
 					if(xc_code) {
@@ -283,7 +283,7 @@ export class Evaluator {
 						console.log(`${g_operation.sender}.${i_msg}: ${g_operation.method}(${g_operation.args.join(', ')})`);
 
 						// call handler
-						g_method_local.handler(k_eoa, g_args_app, g_answer![keys(g_answer!)[0]] as JsonObject, a_results);
+						g_method_local.handler(k_eoa, g_args_app, g_answer![keys(g_answer!)[0]] as JsonObject, a6_response);
 					});
 				}]);
 

@@ -11,23 +11,23 @@
     "node": ">=22.4.0"
   },
   "devDependencies": {
-    "@blake.regalia/belt": "^0.47.2",
-    "@blake.regalia/eslint-config-elite": "^0.4.4",
+    "@blake.regalia/belt": "^0.52.1",
+    "@blake.regalia/eslint-config-elite": "^0.5.11",
     "@blake.regalia/tsconfig": "^0.2.0",
-    "@solar-republic/types": "^0.3.4",
+    "@solar-republic/types": "^0.3.7",
     "@types/chai": "^5.0.1",
-    "@types/node": "^22.10.2",
-    "chai": "^5.1.1",
+    "@types/node": "^22.10.5",
+    "chai": "^5.1.2",
     "chai-bites": "^0.2.0",
-    "eslint": " 8",
+    "eslint": "9",
     "tsc-esm-fix": "^3.1.2",
     "typescript": "^5.7.2"
   },
   "dependencies": {
-    "@solar-republic/contractor": "^0.10.0",
-    "@solar-republic/cosmos-grpc": "^0.18.0-beta.8",
-    "@solar-republic/crypto": "^0.2.14",
-    "@solar-republic/neutrino": "1.7.0-beta.28",
+    "@solar-republic/contractor": "^0.10.3",
+    "@solar-republic/cosmos-grpc": "^0.18.0-beta.10",
+    "@solar-republic/crypto": "^0.3.2",
+    "@solar-republic/neutrino": "1.8.5",
     "@solar-republic/wasm-secp256k1": "^0.4.2",
     "bignumber.js": "^9.1.2",
     "ts-toolbelt": "^9.6.0"

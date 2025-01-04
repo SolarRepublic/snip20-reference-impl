@@ -4,7 +4,7 @@ import {base64_to_bytes} from '@blake.regalia/belt';
 import {random_bytes} from '@solar-republic/crypto';
 import {Wallet} from '@solar-republic/neutrino';
 
-export const SR_LOCAL_WASM = process.env['CONTRACT_WASM'] || '../../contract.wasm';
+export const SR_LOCAL_WASM = process.env['CONTRACT_PATH'] || '../../contract.wasm.gz';
 export const P_SECRET_LCD = (process.env['SECRET_LCD'] || 'http://localhost:1317') as TrustedContextUrl;
 export const P_SECRET_RPC = (process.env['SECRET_RPC'] || 'http://localhost:26656') as TrustedContextUrl;
 export const SI_SECRET_CHAIN = process.env['SECRET_CHAIN'] || 'secretdev-1';
