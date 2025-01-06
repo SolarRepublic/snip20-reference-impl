@@ -1,10 +1,10 @@
 # sSCRT v2 migration contract
 
-This contract migrates the original sSCRT SNIP-20 contract to version 2.0.
+This contract migrates the original SNIP-25 contract to version 2.0.
 
-**Original mainnet code id:** `5`
+**Original mainnet code id:** `877`
 
-**Original mainnet code hash:** `af74387e276be8874f07bec3a87023ee49b0e7ebe08178c49d0a49c3c98ed60e`
+**Original mainnet code hash:** `638a3e1d50175fbcb8373cf801565283e3eb23d88a9b7b7f99fcc5eb1e6b561e`
 
 ## sSCRT version 2.0
 
