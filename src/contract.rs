@@ -1269,9 +1269,9 @@ fn try_mint_impl(
         denom,
         memo,
         block,
+        deps.api,
         #[cfg(feature = "gas_tracking")]
         tracker,
-        deps.api,
     )?;
 
     Ok(())
