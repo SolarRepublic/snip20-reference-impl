@@ -1,7 +1,7 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Timestamp, Uint128, Uint64
+    entry_point, to_binary, Addr, Api, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128, Uint64
 };
 #[cfg(feature = "gas_evaporation")]
 use cosmwasm_std::Api;
@@ -13,8 +13,8 @@ use secret_toolkit::utils::{pad_handle_result, pad_query_result};
 use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 use secret_toolkit_crypto::{hkdf_sha_256, sha_256, ContractPrng};
 
-use crate::legacy_state::{get_all_old_transfers, get_old_balance, VKSEED};
-use crate::{batch, legacy_state, legacy_viewing_key};
+use crate::legacy_state::{get_all_old_transfers, get_old_balance};
+use crate::{batch, legacy_state};
 
 #[cfg(feature = "gas_tracking")]
 use crate::dwb::log_dwb;
@@ -27,7 +27,7 @@ use crate::btbe::{
 use crate::gas_tracker::{GasTracker, LoggingExt};
 #[cfg(feature = "gas_evaporation")]
 use crate::msg::Evaporator;
-use crate::msg::{u8_to_status_level, MigrateMsg};
+use crate::msg::MigrateMsg;
 use crate::msg::{
     AllowanceGivenResult, AllowanceReceivedResult, ContractStatusLevel, ExecuteAnswer, ExecuteMsg,
     InstantiateMsg, QueryAnswer, QueryMsg, QueryWithPermit, ResponseStatus::Success,
@@ -37,7 +37,7 @@ use crate::notifications::{
 };
 use crate::receiver::Snip20ReceiveMsg;
 use crate::state::{
-    safe_add, AllowancesStore, Config, MintersStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET_RELAXED, INTERNAL_SECRET_SENSITIVE, NOTIFICATIONS_ENABLED, TOTAL_SUPPLY
+    safe_add, AllowancesStore, MintersStore, ReceiverHashStore, CHANNELS, CONFIG, CONTRACT_STATUS, INTERNAL_SECRET_RELAXED, INTERNAL_SECRET_SENSITIVE, NOTIFICATIONS_ENABLED, TOTAL_SUPPLY
 };
 use crate::strings::{SEND_TO_SSCRT_CONTRACT_MSG, TRANSFER_HISTORY_UNSUPPORTED_MSG};
 use crate::transaction_history::{
@@ -54,46 +54,7 @@ pub fn migrate(
     env: Env,
     msg: MigrateMsg
 ) -> StdResult<Response> {
-    // migrate old data
-
-    // :: minters
-    let minters = legacy_state::get_old_minters(deps.storage);
-    MintersStore::save(deps.storage, minters)?;
-
-    // :: total supply
-    let total_supply = legacy_state::get_old_total_supply(deps.storage);
-    TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
-
-    // :: contract status
-    let status = legacy_state::get_old_contract_status(deps.storage);
-    CONTRACT_STATUS.save(deps.storage, &u8_to_status_level(status).unwrap())?;
-
-    // :: constants
-    let constants = legacy_state::get_old_constants(deps.storage)?;
-    CONFIG.save(
-        deps.storage,
-        &Config {
-            name: constants.name,
-            admin: constants.admin,
-            symbol: constants.symbol,
-            decimals: constants.decimals,
-            total_supply_is_public: constants.total_supply_is_public,
-            deposit_is_enabled: true,
-            redeem_is_enabled: true,
-            mint_is_enabled: false,
-            burn_is_enabled: false,
-            contract_address: env.contract.address.clone(),
-            supported_denoms: vec!["uscrt".to_string()],
-            can_modify_denoms: false,
-        }
-    )?;
-
-    // :: do not migrate receivers, use old storage
-
-    // :: do not migrate viewing keys, use old storage
-
     // set up dwbs
-
     // initialize the bitwise-trie of bucketed entries
     initialize_btbe(deps.storage)?;
 
@@ -103,7 +64,8 @@ pub fn migrate(
     let rng_seed = env.block.random.as_ref().unwrap();
 
     // use entropy and env.random to create an internal secret for the contract
-    let entropy = constants.prng_seed.as_slice();
+    let prng = legacy_state::PRNG.load(deps.storage)?;
+    let entropy = prng.as_slice();
     let entropy_len = 16 + entropy.len();
     let mut rng_entropy = Vec::with_capacity(entropy_len);
     rng_entropy.extend_from_slice(&env.block.height.to_be_bytes());
@@ -149,7 +111,7 @@ pub fn migrate(
         "contract_viewing_key".as_bytes(),
         32,
     )?;
-    VKSEED.save(deps.storage, &vk_seed)?;
+    ViewingKey::set_seed(deps.storage, &vk_seed);
 
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
@@ -159,21 +121,21 @@ pub fn migrate(
 
         // get all old transfers that sent to this contract
         let txs = get_all_old_transfers(
-            deps.api, 
             deps.storage, 
-            &contract_canonical
-        )?;
+            &env.contract.address
+        )?.0;
 
         // get this contract's old balance
         let balance = get_old_balance(
-            deps.storage, 
+            deps.storage,
+            deps.api,
             &contract_canonical,
         ).unwrap_or_default();
 
         // track the sum of received tokens
         let mut receive_sum = 0;
 
-        let mut rng = ContractPrng::new(rng_seed.0.as_slice(), &sha_256(&constants.prng_seed));
+        let mut rng = ContractPrng::new(rng_seed.0.as_slice(), &sha_256(&prng));
 
         // each old transfer
         for tx in txs {
@@ -196,6 +158,7 @@ pub fn migrate(
                     #[cfg(feature = "gas_tracking")]
                     &mut tracker,
                     false,
+                    deps.api,
                 )?;
 
                 // add to sum of received
@@ -403,7 +366,7 @@ fn migrate_legacy_account(
     }
     
     // lookup old balance
-    let old_balance = legacy_state::get_old_balance(deps.storage, &sender_raw);
+    let old_balance = legacy_state::get_old_balance(deps.storage, deps.api, &sender_raw);
 
     // no entry in legacy balance
     if old_balance.is_none() {
@@ -424,6 +387,7 @@ fn migrate_legacy_account(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        deps.api,
     )?;
 
     Ok(Response::new()
@@ -567,7 +531,7 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             } 
             query_list_permit_revocations(deps, account.as_str()) 
         },
-        QueryWithPermit::LegacyTransferHistory { page, page_size } => {
+        QueryWithPermit::LegacyTransferHistory { page, page_size, should_filter_decoys } => {
             if !permit.check_permission(&TokenPermissions::History) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query history, got permissions {:?}",
@@ -579,7 +543,24 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
                 deps,
                 &Addr::unchecked(account), 
                 page.unwrap_or(0), 
-                page_size
+                page_size,
+                should_filter_decoys,
+            )
+        }
+        QueryWithPermit::LegacyTransactionHistory { page, page_size, should_filter_decoys } => {
+            if !permit.check_permission(&TokenPermissions::History) {
+                return Err(StdError::generic_err(format!(
+                    "No permission to query history, got permissions {:?}",
+                    permit.params.permissions
+                )));
+            }
+
+            query_legacy_transaction_history(
+                deps,
+                &Addr::unchecked(account), 
+                page.unwrap_or(0), 
+                page_size,
+                should_filter_decoys,
             )
         }
     }
@@ -589,15 +570,8 @@ pub fn viewing_keys_queries(deps: Deps, env: Env,  msg: QueryMsg) -> StdResult<B
     let (addresses, key) = msg.get_validation_params(deps.api)?;
 
     for address in addresses {
-        // legacy viewing key
-        let canonical_addr = deps.api.addr_canonicalize(address.as_str())?;
-        let expected_key = legacy_state::read_viewing_key(deps.storage, &canonical_addr);
-
-        if expected_key.is_none() {
-            // Checking the key will take significant time. We don't want to exit immediately if it isn't set
-            // in a way which will allow to time the command and determine if a viewing key doesn't exist
-            key.check_viewing_key(&[0u8; legacy_viewing_key::VIEWING_KEY_SIZE]);
-        } else if key.check_viewing_key(expected_key.unwrap().as_slice()) {
+        let result = ViewingKey::check(deps.storage, address.as_str(), key.as_str());
+        if result.is_ok() {
             return match msg {
                 // Base
                 QueryMsg::Balance { address, .. } => query_balance(deps, address),
@@ -639,8 +613,16 @@ pub fn viewing_keys_queries(deps: Deps, env: Env,  msg: QueryMsg) -> StdResult<B
                     address, 
                     page, 
                     page_size,
+                    should_filter_decoys,
                     ..
-                } => query_legacy_transfer_history(deps, &address, page.unwrap_or(0), page_size),
+                } => query_legacy_transfer_history(deps, &address, page.unwrap_or(0), page_size, should_filter_decoys),
+                QueryMsg::LegacyTransactionHistory { 
+                    address, 
+                    page, 
+                    page_size,
+                    should_filter_decoys,
+                    ..
+                } => query_legacy_transaction_history(deps, &address, page.unwrap_or(0), page_size, should_filter_decoys),
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -913,11 +895,38 @@ pub fn query_legacy_transfer_history(
     account: &Addr,
     page: u32,
     page_size: u32,
+    should_filter_decoys: bool,
 ) -> StdResult<Binary> {
-    let address = deps.api.addr_canonicalize(account.as_str()).unwrap();
-    let txs = legacy_state::get_old_transfers(deps.api, deps.storage, &address, page, page_size)?;
+    let account = Addr::unchecked(account);
+    let (txs, total) = legacy_state::StoredLegacyTransfer::get_transfers(
+        deps.storage, 
+        account,
+        page,
+        page_size,
+        should_filter_decoys
+    )?;
 
-    let result = QueryAnswer::LegacyTransferHistory { txs };
+    let result = QueryAnswer::LegacyTransferHistory { txs, total: Some(total) };
+    to_binary(&result)
+}
+
+pub fn query_legacy_transaction_history(
+    deps: Deps,
+    account: &Addr,
+    page: u32,
+    page_size: u32,
+    should_filter_decoys: bool,
+) -> StdResult<Binary> {
+    let account = Addr::unchecked(account);
+    let (txs, total) = legacy_state::StoredExtendedTx::get_txs(
+        deps.storage, 
+        account,
+        page,
+        page_size,
+        should_filter_decoys
+    )?;
+
+    let result = QueryAnswer::LegacyTransactionHistory { txs, total: Some(total) };
     to_binary(&result)
 }
 // :: migration end
@@ -928,14 +937,14 @@ pub fn query_balance(deps: Deps, account: String) -> StdResult<Binary> {
     // The address of 'account' should not be validated if query_balance() was called by a permit
     // call, for compatibility with non-Secret addresses.
     let account = Addr::unchecked(account);
-    let account = deps.api.addr_canonicalize(account.as_str())?;
+    let account: CanonicalAddr = deps.api.addr_canonicalize(account.as_str())?;
     
     let dwb = DWB.load(deps.storage)?;
     let dwb_index = dwb.recipient_match(&account);
 
     // get stored balance from new or legacy
     let mut balance = stored_balance(deps.storage, &account)?
-        .unwrap_or_else(|| legacy_state::get_old_balance(deps.storage, &account).unwrap_or_default());
+        .unwrap_or_else(|| legacy_state::get_old_balance(deps.storage, deps.api, &account).unwrap_or_default());
 
     // dwb entry exists; include its amount in total balance
     if dwb_index > 0 {
@@ -1262,6 +1271,7 @@ fn try_mint_impl(
         block,
         #[cfg(feature = "gas_tracking")]
         tracker,
+        deps.api,
     )?;
 
     Ok(())
@@ -1430,13 +1440,6 @@ fn try_batch_mint(
 
 pub fn try_set_key(deps: DepsMut, info: MessageInfo, key: String) -> StdResult<Response> {
     ViewingKey::set(deps.storage, info.sender.as_str(), key.as_str());
-
-    // legacy set key
-    let vk = legacy_viewing_key::ViewingKey(key);
-
-    let message_sender = deps.api.addr_canonicalize(info.sender.as_str())?;
-    legacy_state::write_viewing_key(deps.storage, &message_sender, &vk);
-
     Ok(
         Response::new().set_data(to_binary(&ExecuteAnswer::SetViewingKey {
             status: Success,
@@ -1453,14 +1456,9 @@ pub fn try_create_key(
 ) -> StdResult<Response> {
     let entropy = [entropy.unwrap_or_default().as_bytes(), &rng.rand_bytes()].concat();
 
-    // legacy create key
-    let vk_seed = VKSEED.load(deps.storage)?;
-    let key = legacy_viewing_key::ViewingKey::new(&env, &info, &vk_seed, entropy.as_slice());
+    let key = ViewingKey::create(deps.storage, &info, &env, info.sender.as_str(), &entropy);
 
-    let message_sender = deps.api.addr_canonicalize(info.sender.as_str())?;
-    legacy_state::write_viewing_key(deps.storage, &message_sender, &key);
-
-    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::CreateViewingKey { key: key.0 })?))
+    Ok(Response::new().set_data(to_binary(&ExecuteAnswer::CreateViewingKey { key })?))
 }
 
 fn set_contract_status(
@@ -1614,6 +1612,7 @@ fn try_deposit(
         &env.block,
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
+        deps.api,
     )?;
 
     let resp = Response::new().set_data(to_binary(&ExecuteAnswer::Deposit { status: Success })?);
@@ -1677,6 +1676,7 @@ fn try_redeem(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        deps.api,
         false,
     )?;
 
@@ -1759,6 +1759,7 @@ fn try_transfer_impl(
         #[cfg(feature = "gas_tracking")]
         tracker,
         false,
+        deps.api,
     )?;
 
     // create the tokens spent notification for owner
@@ -1985,10 +1986,8 @@ fn try_add_receiver_api_callback(
         return Ok(());
     }
 
-    //let receiver_hash = ReceiverHashStore::may_load(storage, &recipient)?;
-    let receiver_hash = legacy_state::get_receiver_hash(storage, &recipient);
+    let receiver_hash = ReceiverHashStore::may_load(storage, &recipient)?;
     if let Some(receiver_hash) = receiver_hash {
-        let receiver_hash = receiver_hash?;
         let receiver_msg = Snip20ReceiveMsg::new(sender, from, amount, memo, msg);
         let callback_msg = receiver_msg.into_cosmos_msg(receiver_hash, recipient)?;
 
@@ -2225,8 +2224,7 @@ fn try_register_receive(
     info: MessageInfo,
     code_hash: String,
 ) -> StdResult<Response> {
-    //ReceiverHashStore::save(deps.storage, &info.sender, code_hash)?;
-    legacy_state::set_receiver_hash(deps.storage, &info.sender, code_hash);
+    ReceiverHashStore::save(deps.storage, &info.sender, code_hash)?;
 
     let data = to_binary(&ExecuteAnswer::RegisterReceive { status: Success })?;
     Ok(Response::new()
@@ -2317,6 +2315,7 @@ fn try_transfer_from_impl(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         true,
+        deps.api,
     )?;
 
     // create tokens spent notification for owner
@@ -2693,6 +2692,7 @@ fn try_burn_from(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        deps.api,
         raw_burner == raw_owner,
     )?;
 
@@ -2708,6 +2708,7 @@ fn try_burn_from(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
             &env.block,
+            deps.api,
             false,
         )?;
     }
@@ -2804,6 +2805,7 @@ fn try_batch_burn_from(
             #[cfg(feature = "gas_tracking")]
             &mut tracker,
             &env.block,
+            deps.api,
             raw_spender == raw_owner,
         )?;
 
@@ -2819,6 +2821,7 @@ fn try_batch_burn_from(
                 #[cfg(feature = "gas_tracking")]
                 &mut tracker,
                 &env.block,
+                deps.api,
                 false,
             )?;
         }
@@ -3105,6 +3108,7 @@ fn try_burn(
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
         &env.block,
+        deps.api,
         false,
     )?;
 
@@ -3157,6 +3161,7 @@ fn perform_transfer(
     block: &BlockInfo,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
     is_from_action: bool,
+    api: &dyn Api, // added for migration
 ) -> StdResult<u128> {
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("perform_transfer.1");
@@ -3185,6 +3190,7 @@ fn perform_transfer(
         #[cfg(feature = "gas_tracking")]
         tracker,
         block,
+        api,
         is_from_action && sender == from,
     )?;
 
@@ -3200,6 +3206,7 @@ fn perform_transfer(
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            api,
             false,
         )?;
     }
@@ -3214,6 +3221,7 @@ fn perform_transfer(
         #[cfg(feature = "gas_tracking")]
         tracker,
         block,
+        api,
     )?;
 
     #[cfg(feature = "gas_tracking")]
@@ -3236,6 +3244,7 @@ fn perform_mint(
     denom: String,
     memo: Option<String>,
     block: &BlockInfo,
+    api: &dyn Api, // added for migration
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
 ) -> StdResult<()> {
     // first store the tx information in the global append list of txs and get the new tx id
@@ -3256,6 +3265,7 @@ fn perform_mint(
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            api,
             false,
         )?;
     }
@@ -3270,6 +3280,7 @@ fn perform_mint(
         #[cfg(feature = "gas_tracking")]
         tracker,
         block,
+        api,
     )?;
 
     DWB.save(store, &dwb)?;
@@ -3285,6 +3296,7 @@ fn perform_deposit(
     denom: String,
     block: &BlockInfo,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
+    api: &dyn Api, // added for migration
 ) -> StdResult<()> {
     // first store the tx information in the global append list of txs and get the new tx id
     let tx_id = store_deposit_action(store, amount, denom, block)?;
@@ -3302,6 +3314,7 @@ fn perform_deposit(
         #[cfg(feature = "gas_tracking")]
         tracker,
         block,
+        api,
     )?;
 
     DWB.save(store, &dwb)?;
@@ -3365,18 +3378,6 @@ fn check_if_admin(config_admin: &Addr, account: &Addr) -> StdResult<()> {
     }
 
     Ok(())
-}
-
-fn is_valid_name(name: &str) -> bool {
-    let len = name.len();
-    (3..=30).contains(&len)
-}
-
-fn is_valid_symbol(symbol: &str) -> bool {
-    let len = symbol.len();
-    let len_is_valid = (3..=20).contains(&len);
-
-    len_is_valid && symbol.bytes().all(|byte| byte.is_ascii_alphabetic())
 }
 
 #[cfg(test)]
@@ -4484,7 +4485,7 @@ mod tests {
         assert!(ensure_success(result));
 
         let hash =
-            legacy_state::get_receiver_hash(&deps.storage, &Addr::unchecked("contract".to_string()))
+            ReceiverHashStore::may_load(&deps.storage, &Addr::unchecked("contract".to_string()))
                 .unwrap()
                 .unwrap();
         assert_eq!(hash, "this_is_a_hash_of_a_code".to_string());

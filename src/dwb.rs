@@ -1,5 +1,5 @@
 use constant_time_eq::constant_time_eq;
-use cosmwasm_std::{Api, BlockInfo, CanonicalAddr, StdError, StdResult, Storage, Timestamp};
+use cosmwasm_std::{Api, BlockInfo, CanonicalAddr, StdError, StdResult, Storage,};
 use rand_core::RngCore;
 use secret_toolkit::storage::Item;
 use secret_toolkit_crypto::ContractPrng;
@@ -91,13 +91,14 @@ impl DelayedWriteBuffer {
         op_name: &str,
         #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
         block: &BlockInfo, // added for migration
+        api: &dyn Api, // added for migration
         is_from_self: bool,
     ) -> StdResult<u128> {
         #[cfg(feature = "gas_tracking")]
         let mut group1 = tracker.group("settle_sender_or_owner_account.1");
 
         // release the address from the buffer
-        let (balance, mut dwb_entry) = self.release_dwb_recipient(store, address, block)?;
+        let (balance, mut dwb_entry) = self.release_dwb_recipient(store, address, block, api)?;
 
         #[cfg(feature = "gas_tracking")]
         group1.log("release_dwb_recipient");
@@ -139,6 +140,7 @@ impl DelayedWriteBuffer {
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            api,
         )?;
 
         Ok(checked_balance.unwrap())
@@ -151,6 +153,7 @@ impl DelayedWriteBuffer {
         storage: &mut dyn Storage,
         address: &CanonicalAddr,
         block: &BlockInfo, // added for migration
+        api: &dyn Api, // added for migration
     ) -> StdResult<(u128, DelayedWriteBufferEntry)> {
         // loookup stored balance
         let stored_balance_opt = stored_balance(storage, address)?;
@@ -176,7 +179,7 @@ impl DelayedWriteBuffer {
         // nothing was stored yet
         if stored_balance_opt.is_none() {
             // lookup old balance
-            let old_balance = legacy_state::get_old_balance(storage, address);
+            let old_balance = legacy_state::get_old_balance(storage, api, address);
 
             // legacy balance still exists
             if let Some(migrated_balance) = old_balance {
@@ -199,7 +202,7 @@ impl DelayedWriteBuffer {
                 entry.add_amount(migrated_balance)?;
 
                 // clear the old balance, so migration only happens once
-                legacy_state::clear_old_balance(storage, address);
+                legacy_state::clear_old_balance(storage, api, address);
             }
         }
 
@@ -233,6 +236,7 @@ impl DelayedWriteBuffer {
         amount: u128,
         #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker<'a>,
         block: &BlockInfo, // added for migration
+        api: &dyn Api, // added for migration
     ) -> StdResult<()> {
         #[cfg(feature = "gas_tracking")]
         let mut group1 = tracker.group("add_recipient.1");
@@ -329,6 +333,7 @@ impl DelayedWriteBuffer {
             #[cfg(feature = "gas_tracking")]
             tracker,
             block,
+            api,
         )?;
 
         #[cfg(feature = "gas_tracking")]

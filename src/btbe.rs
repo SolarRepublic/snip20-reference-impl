@@ -3,7 +3,7 @@
 include!(concat!(env!("OUT_DIR"), "/config.rs"));
 
 use constant_time_eq::constant_time_eq;
-use cosmwasm_std::{BlockInfo, CanonicalAddr, StdError, StdResult, Storage, Timestamp};
+use cosmwasm_std::{Api, BlockInfo, CanonicalAddr, StdError, StdResult, Storage, Timestamp};
 use secret_toolkit::{
     serialization::{Bincode2, Serde},
     storage::Item,
@@ -564,6 +564,7 @@ pub fn settle_dwb_entry(
     amount_spent: Option<u128>,
     #[cfg(feature = "gas_tracking")] tracker: &mut GasTracker,
     block: &BlockInfo, // added for migration
+    api: &dyn Api, // added for migration
 ) -> StdResult<()> {
     #[cfg(feature = "gas_tracking")]
     let mut group1 = tracker.group("#merge_dwb_entry.1");
@@ -603,7 +604,7 @@ pub fn settle_dwb_entry(
     // nothing was stored yet
     else {
         // lookup old balance
-        let old_balance = legacy_state::get_old_balance(storage, address);
+        let old_balance = legacy_state::get_old_balance(storage, api, address);
 
         // legacy balance still exists
         if let Some(migrated_balance) = old_balance {
@@ -626,7 +627,7 @@ pub fn settle_dwb_entry(
             dwb_entry.add_amount(migrated_balance)?;
 
             // clear the old balance, so migration only happens once
-            legacy_state::clear_old_balance(storage, address);
+            legacy_state::clear_old_balance(storage, api, address);
         }
 
         // need to insert new entry
@@ -781,31 +782,6 @@ pub fn initialize_btbe(storage: &mut dyn Storage) -> StdResult<()> {
     Ok(())
 }
 
-// :: migration helper function
-fn prepare_migration_tx_id(store: &mut dyn Storage, current_tx_id: u64, amount: u128) -> StdResult<u64> {
-    // get the full tx we are working on to access block info
-    let stored_incoming_tx = TRANSACTIONS
-        .add_suffix(&current_tx_id.to_be_bytes())
-        .load(store)?;
-    // get the denom. we could pass this as a parameter since we've already read 
-    // it from storagae earlier, but this is simpler to implement for an uncommon operation
-    let denom = CONFIG.load(store)?.symbol;
-
-    // add migration to tx history
-    store_migration_action(
-        store, 
-        amount, 
-        denom, 
-        &BlockInfo { 
-            height: stored_incoming_tx.block_height, 
-            time: Timestamp::from_seconds(stored_incoming_tx.block_time), 
-            chain_id: "ignored".to_string(), 
-            random: None 
-        }
-    )
-}
-// :: migration
-
 #[cfg(test)]
 mod tests {
     use std::any::Any;
@@ -931,7 +907,7 @@ mod tests {
 
             let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-            let _result = settle_dwb_entry(storage, &mut dwb_entry, None, &env.block);
+            let _result = settle_dwb_entry(storage, &mut dwb_entry, None, &env.block, &deps.api);
 
             let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(storage).unwrap();
             assert_eq!(btbe_node_count, 1);
@@ -961,7 +937,7 @@ mod tests {
 
         let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
-        let _result = settle_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block);
+        let _result = settle_dwb_entry(&mut deps.storage, &mut dwb_entry, None, &env.block, &deps.api);
 
         let btbe_node_count = BTBE_TRIE_NODES_COUNT.load(&deps.storage).unwrap();
         assert_eq!(btbe_node_count, 3);

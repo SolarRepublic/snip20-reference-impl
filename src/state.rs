@@ -208,20 +208,19 @@ impl AllowancesStore {
 
 // Receiver Interface
 
-// we won't use this new storage for sscrt receivers, so we don't have to migrate the data structures
-//pub static RECEIVER_HASH: Item<String> = Item::new(PREFIX_RECEIVERS);
-//pub struct ReceiverHashStore {}
-//impl ReceiverHashStore {
-//    pub fn may_load(store: &dyn Storage, account: &Addr) -> StdResult<Option<String>> {
-//        let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
-//        receiver_hash.may_load(store)
-//    }
-//
-//    pub fn save(store: &mut dyn Storage, account: &Addr, code_hash: String) -> StdResult<()> {
-//        let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
-//        receiver_hash.save(store, &code_hash)
-//    }
-//}
+pub static RECEIVER_HASH: Item<String> = Item::new(PREFIX_RECEIVERS);
+pub struct ReceiverHashStore {}
+impl ReceiverHashStore {
+    pub fn may_load(store: &dyn Storage, account: &Addr) -> StdResult<Option<String>> {
+        let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
+        receiver_hash.may_load(store)
+    }
+
+    pub fn save(store: &mut dyn Storage, account: &Addr, code_hash: String) -> StdResult<()> {
+        let receiver_hash = RECEIVER_HASH.add_suffix(account.as_str().as_bytes());
+        receiver_hash.save(store, &code_hash)
+    }
+}
 
 // internal secret used for sensitive data such as address hashes in the btbe and notifications
 pub static INTERNAL_SECRET_SENSITIVE: Item<Vec<u8>> = Item::new(b"internal-secret-secure");

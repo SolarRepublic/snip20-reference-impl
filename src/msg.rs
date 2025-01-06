@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{batch, legacy_state, legacy_viewing_key, transaction_history::Tx};
+use crate::{batch, legacy_state, transaction_history::Tx};
 use cosmwasm_std::{Addr, Api, Binary, StdError, StdResult, Uint128, Uint64};
 use secret_toolkit::{notification::ChannelInfoData, permit::{AllRevocation, AllRevokedInterval, Permit}};
 
@@ -567,6 +567,14 @@ pub enum QueryMsg {
         key: String,
         page: Option<u32>,
         page_size: u32,
+        should_filter_decoys: bool,
+    },
+    LegacyTransactionHistory {
+        address: Addr,
+        key: String,
+        page: Option<u32>,
+        page_size: u32,
+        should_filter_decoys: bool,
     },
 
     WithPermit {
@@ -598,19 +606,19 @@ pub struct ViewerInfo {
 }
 
 impl QueryMsg {
-    pub fn get_validation_params(&self, api: &dyn Api) -> StdResult<(Vec<Addr>, legacy_viewing_key::ViewingKey)> {
+    pub fn get_validation_params(&self, api: &dyn Api) -> StdResult<(Vec<Addr>, String)> {
         match self {
             Self::Balance { address, key } => {
                 let address = api.addr_validate(address.as_str())?;
-                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
+                Ok((vec![address], key.clone()))
             }
             Self::TransferHistory { address, key, .. } => {
                 let address = api.addr_validate(address.as_str())?;
-                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
+                Ok((vec![address], key.clone()))
             }
             Self::TransactionHistory { address, key, .. } => {
                 let address = api.addr_validate(address.as_str())?;
-                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
+                Ok((vec![address], key.clone()))
             }
             Self::Allowance {
                 owner,
@@ -621,32 +629,38 @@ impl QueryMsg {
                 let owner = api.addr_validate(owner.as_str())?;
                 let spender = api.addr_validate(spender.as_str())?;
 
-                Ok((vec![owner, spender], legacy_viewing_key::ViewingKey(key.clone())))
+                Ok((vec![owner, spender], key.clone()))
             }
             Self::AllowancesGiven { owner, key, .. } => {
                 let owner = api.addr_validate(owner.as_str())?;
-                Ok((vec![owner], legacy_viewing_key::ViewingKey(key.clone())))
+                Ok((vec![owner], key.clone()))
             }
             Self::AllowancesReceived { spender, key, .. } => {
                 let spender = api.addr_validate(spender.as_str())?;
-                Ok((vec![spender], legacy_viewing_key::ViewingKey(key.clone())))
+                Ok((vec![spender], key.clone()))
             }
             Self::ChannelInfo { viewer, .. } => {
                 let address = api.addr_validate(viewer.address.as_str())?;
-                Ok((vec![address], legacy_viewing_key::ViewingKey(viewer.viewing_key.clone())))
+                Ok((vec![address], viewer.viewing_key.clone()))
             }
             Self::LegacyTransferHistory { address, key, .. } => {
                 let address = api.addr_validate(address.as_str())?;
-                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
+                Ok((vec![address], key.clone()))
+            }
+            Self::LegacyTransactionHistory { address, key, .. } => {
+                let address = api.addr_validate(address.as_str())?;
+                Ok((vec![address], key.clone()))
             }
             Self::ListPermitRevocations { viewer, .. } => {
                 let address = api.addr_validate(viewer.address.as_str())?;
-                Ok((vec![address], legacy_viewing_key::ViewingKey(viewer.viewing_key.clone())))
+                Ok((vec![address], viewer.viewing_key.clone()))
             }
             _ => panic!("This query type does not require authentication"),
         }
     }
 }
+
+
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 #[cfg_attr(test, derive(Eq, PartialEq))]
@@ -684,6 +698,12 @@ pub enum QueryWithPermit {
     LegacyTransferHistory {
         page: Option<u32>,
         page_size: u32,
+        should_filter_decoys: bool,
+    },
+    LegacyTransactionHistory {
+        page: Option<u32>,
+        page_size: u32,
+        should_filter_decoys: bool,
     },
     // SNIP 24.1
     ListPermitRevocations { 
@@ -768,6 +788,12 @@ pub enum QueryAnswer {
     // Pre-DWB history
     LegacyTransferHistory {
         txs: Vec<legacy_state::Tx>,
+        total: Option<u64>,
+    },
+
+    LegacyTransactionHistory {
+        txs: Vec<legacy_state::ExtendedTx>,
+        total: Option<u64>,
     },
 
     #[cfg(feature = "gas_tracking")]
