@@ -64,7 +64,7 @@ pub fn migrate(
     let rng_seed = env.block.random.as_ref().unwrap();
 
     // use entropy and env.random to create an internal secret for the contract
-    let prng = legacy_state::PRNG.load(deps.storage)?;
+    let prng = legacy_state::PrngStore::load(deps.storage)?;
     let entropy = prng.as_slice();
     let entropy_len = 16 + entropy.len();
     let mut rng_entropy = Vec::with_capacity(entropy_len);
@@ -1603,12 +1603,15 @@ fn try_deposit(
     #[cfg(feature = "gas_tracking")]
     let mut tracker: GasTracker = GasTracker::new(deps.api);
 
+    // use the first denom given for tx record
+    let denom = &info.funds[0].denom;
+
     perform_deposit(
         deps.storage,
         rng,
         &sender_address,
         raw_amount,
-        "uscrt".to_string(),
+        denom.clone(),
         &env.block,
         #[cfg(feature = "gas_tracking")]
         &mut tracker,

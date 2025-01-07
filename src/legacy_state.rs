@@ -16,6 +16,13 @@ pub const PREFIX_BALANCES: &[u8] = b"balances";
 
 pub static PRNG: Item<[u8; SHA256_HASH_SIZE]> = Item::new(KEY_PRNG);
 
+pub struct PrngStore {}
+impl PrngStore {
+    pub fn load(store: &dyn Storage) -> StdResult<[u8; SHA256_HASH_SIZE]> {
+        PRNG.load(store).map_err(|_err| StdError::generic_err(""))
+    }
+}
+
 // Note that id is a globally incrementing counter.
 // Since it's 64 bits long, even at 50 tx/s it would take
 // over 11 billion years for it to rollback. I'm pretty sure
