@@ -541,12 +541,16 @@ pub enum QueryMsg {
         key: String,
         page: Option<u32>,
         page_size: u32,
+        // ignored, included for front-end compatibility
+        should_filter_decoys: Option<bool>,
     },
     TransactionHistory {
         address: String,
         key: String,
         page: Option<u32>,
         page_size: u32,
+        // ignored, included for front-end compatibility
+        should_filter_decoys: Option<bool>,
     },
     Minters {},
 
@@ -684,10 +688,14 @@ pub enum QueryWithPermit {
     TransferHistory {
         page: Option<u32>,
         page_size: u32,
+        // ignored, included for front-end compatibility
+        should_filter_decoys: Option<bool>,
     },
     TransactionHistory {
         page: Option<u32>,
         page_size: u32,
+        // ignored, included for front-end compatibility
+        should_filter_decoys: Option<bool>,
     },
     // SNIP-52 Private Push Notifications
     ChannelInfo {
@@ -698,12 +706,12 @@ pub enum QueryWithPermit {
     LegacyTransferHistory {
         page: Option<u32>,
         page_size: u32,
-        should_filter_decoys: bool,
+        should_filter_decoys: Option<bool>,
     },
     LegacyTransactionHistory {
         page: Option<u32>,
         page_size: u32,
-        should_filter_decoys: bool,
+        should_filter_decoys: Option<bool>,
     },
     // SNIP 24.1
     ListPermitRevocations { 

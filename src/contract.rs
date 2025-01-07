@@ -444,7 +444,7 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
         QueryWithPermit::TransferHistory { .. } => {
             return Err(StdError::generic_err(TRANSFER_HISTORY_UNSUPPORTED_MSG));
         }
-        QueryWithPermit::TransactionHistory { page, page_size } => {
+        QueryWithPermit::TransactionHistory { page, page_size, .. } => {
             if !permit.check_permission(&TokenPermissions::History) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query history, got permissions {:?}",
@@ -544,7 +544,7 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
                 &Addr::unchecked(account), 
                 page.unwrap_or(0), 
                 page_size,
-                should_filter_decoys,
+                should_filter_decoys.unwrap_or(true),
             )
         }
         QueryWithPermit::LegacyTransactionHistory { page, page_size, should_filter_decoys } => {
@@ -560,7 +560,7 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
                 &Addr::unchecked(account), 
                 page.unwrap_or(0), 
                 page_size,
-                should_filter_decoys,
+                should_filter_decoys.unwrap_or(true),
             )
         }
     }
@@ -4117,6 +4117,7 @@ mod tests {
             key: "key".to_string(),
             page: None,
             page_size: 3,
+            should_filter_decoys: None,
         };
         let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
@@ -4183,6 +4184,7 @@ mod tests {
             key: "key".to_string(),
             page: Some(8),
             page_size: 6,
+            should_filter_decoys: None,
         };
         let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
@@ -4295,6 +4297,7 @@ mod tests {
             key: "key".to_string(),
             page: Some(3),
             page_size: 33,
+            should_filter_decoys: None,
             //page: None,
             //page_size: 500,
         };
@@ -7588,6 +7591,7 @@ mod tests {
             key: "key".to_string(),
             page: None,
             page_size: 10,
+            should_filter_decoys: None,
         };
         let query_result = query(deps.as_ref(), mock_env(), query_msg);
         let transfers = match from_binary(&query_result.unwrap()).unwrap() {
