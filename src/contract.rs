@@ -615,14 +615,26 @@ pub fn viewing_keys_queries(deps: Deps, env: Env,  msg: QueryMsg) -> StdResult<B
                     page_size,
                     should_filter_decoys,
                     ..
-                } => query_legacy_transfer_history(deps, &address, page.unwrap_or(0), page_size, should_filter_decoys),
+                } => query_legacy_transfer_history(
+                    deps,
+                    &address,
+                    page.unwrap_or(0),
+                    page_size,
+                    should_filter_decoys.unwrap_or(true)
+                ),
                 QueryMsg::LegacyTransactionHistory { 
                     address, 
                     page, 
                     page_size,
                     should_filter_decoys,
                     ..
-                } => query_legacy_transaction_history(deps, &address, page.unwrap_or(0), page_size, should_filter_decoys),
+                } => query_legacy_transaction_history(
+                    deps,
+                    &address,
+                    page.unwrap_or(0),
+                    page_size,
+                    should_filter_decoys.unwrap_or(true)
+                ),
                 _ => panic!("This query type does not require authentication"),
             };
         }

@@ -567,14 +567,14 @@ pub enum QueryMsg {
         key: String,
         page: Option<u32>,
         page_size: u32,
-        should_filter_decoys: bool,
+        should_filter_decoys: Option<bool>,
     },
     LegacyTransactionHistory {
         address: Addr,
         key: String,
         page: Option<u32>,
         page_size: u32,
-        should_filter_decoys: bool,
+        should_filter_decoys: Option<bool>,
     },
 
     WithPermit {
