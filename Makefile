@@ -3,7 +3,7 @@ SECRETCLI = docker exec -it secretdev /usr/bin/secretcli
 SECRET_GRPC_PORT ?= 9090
 SECRET_LCD_PORT ?= 1317
 SECRET_RPC_PORT ?= 26657
-LOCALSECRET_VERSION ?= v1.15.0-beta.14
+LOCALSECRET_VERSION ?= v1.15.0
 
 .PHONY: all
 all: clippy test
