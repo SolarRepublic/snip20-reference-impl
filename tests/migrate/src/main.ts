@@ -24,10 +24,11 @@ import {test_dwb} from './test-dwb';
 
 
 // mainnet contract token address
-const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
+//const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
+const SA_MAINNET_SNIP25 = 'secret1vcau4rkn7mvfwl8hf0dqa9p0jr59983e3qqe3z'; //sAXL
 
 // preload sSCRT
-const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_a);
+const k_snip_original = await preload_original_contract(SA_MAINNET_SNIP25, k_wallet_a);
 
 // create contract eoa
 const k_eoa_snip = await ExternallyOwnedAccount.fromAddress(k_snip_original.addr, '$contract');

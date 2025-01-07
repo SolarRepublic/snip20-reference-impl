@@ -199,6 +199,7 @@ export async function preload_original_contract(
 			enable_mint: true,
 			enable_burn: true,
 		},
+		supported_denoms: ["uscrt"],
 	}, 10_000_000n, [k_wallet.addr]);
 
 	// const sa_snip = await instantiate_contract(k_wallet, sg_code_id!, {
