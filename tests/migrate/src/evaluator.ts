@@ -260,7 +260,9 @@ export class Evaluator {
 
 					// was expecting failure
 					if(b_fail) {
-						throw Error(`Was expecting tx to fail but it succeeded`);
+						debugger;
+						const [,,, g_exec_0] = a_execs[0];
+						throw Error(`Was expecting tx <${g_exec_0.method} ${ExternallyOwnedAccount.at(g_exec_0.sender).label} ${g_exec_0.args.join(' ')}> to fail with "${s_expect}" but it succeeded`);
 					}
 
 					// succeeded; each response

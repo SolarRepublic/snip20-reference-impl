@@ -109,10 +109,12 @@ export class ExternallyOwnedAccount {
 	transfers: Snip20TransferEvent[] = [];
 	txs: Snip250TxEvent[] = [];
 
+	legacy_txs: Snip250TxEvent[] = [];
+
 	protected constructor(
 		protected _atu8_sk: Uint8Array,
 		protected _k_wallet: Wallet<'secret'>,
-		protected _s_alias: string=''
+		protected _s_alias=''
 	) {
 		this._atu8_pk33 = Y_SECP256K1.sk_to_pk(_atu8_sk);
 		this._sa_addr = _k_wallet.addr;
@@ -159,6 +161,11 @@ export class ExternallyOwnedAccount {
 				},
 			});
 		}
+	}
+
+	migrate_histories(): void {
+		this.legacy_txs = this.txs;
+		this.txs = [];
 	}
 
 	push(g_event: Snip250TxEvent, b_batch=false, b_eventless=false): void {

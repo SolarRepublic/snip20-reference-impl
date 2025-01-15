@@ -1,5 +1,5 @@
 import type {JsonValue} from '@blake.regalia/belt';
-import type {SecretContractInterface, Snip24, FungibleTransferCall, Snip20, Snip20Queries, Snip24Executions, Snip26, Snip26Queries} from '@solar-republic/contractor';
+import type {SecretContractInterface, Snip24, FungibleTransferCall, Snip20, Snip20Queries, Snip24Executions, Snip26, Snip26Queries, Snip25} from '@solar-republic/contractor';
 import type {EncodedGoogleProtobufAny} from '@solar-republic/cosmos-grpc/google/protobuf/any';
 import type {TxResponseTuple, Wallet, SecretWasm} from '@solar-republic/neutrino';
 import type {CwHexLower, CwUint64, WeakUint128Str, WeakUintStr, WeakSecretAccAddr} from '@solar-republic/types';
@@ -178,7 +178,7 @@ export async function replicate_code_from_mainnet(sa_contract: WeakSecretAccAddr
 export async function preload_original_contract(
 	sa_contract: WeakSecretAccAddr,
 	k_wallet: Wallet<'secret'>
-): Promise<SecretContract<Snip20>> {
+): Promise<SecretContract<Snip25>> {
 	// ensure original code is available
 	const [sg_code_id] = await replicate_code_from_mainnet(sa_contract);
 
@@ -199,7 +199,7 @@ export async function preload_original_contract(
 			enable_mint: true,
 			enable_burn: true,
 		},
-		supported_denoms: ["uscrt"],
+		supported_denoms: ['uscrt'],
 	}, 10_000_000n, [k_wallet.addr]);
 
 	// const sa_snip = await instantiate_contract(k_wallet, sg_code_id!, {

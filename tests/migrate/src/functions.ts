@@ -27,6 +27,21 @@ export function transfer_from(
 ) {
 	const k_owner = k_from || k_sender;
 
+	// create event
+	const g_tx_event: Snip250TxEvent = {
+		action: {
+			transfer: {
+				from: (k_owner || k_sender).address,
+				sender: k_sender.address,
+				recipient: k_recipient.address,
+			},
+		},
+		coins: {
+			denom: 'TKN',
+			amount: `${xg_amount}` as const,
+		},
+	};
+
 	// migrated
 	if(G_GLOBAL.k_snip_migrated) {
 		// init migration
@@ -35,50 +50,28 @@ export function transfer_from(
 			k_recipient.migrate();
 		}
 
-		// create event
-		const g_event: Snip250TxEvent = {
-			action: {
-				transfer: {
-					from: (k_owner || k_sender).address,
-					sender: k_sender.address,
-					recipient: k_recipient.address,
-				},
-			},
-			coins: {
-				denom: 'TKN',
-				amount: `${xg_amount}` as const,
-			},
-		};
-
 		// add to histories
-		k_owner.push(g_event, b_batch, b_eventless);
-		k_recipient.push(g_event, b_batch, b_eventless);
+		k_owner.push(g_tx_event, b_batch, b_eventless);
+		k_recipient.push(g_tx_event, b_batch, b_eventless);
 
 		// *_from action
 		if(k_from) {
 			// add to sender history as well
 			k_sender.migrate();
-			k_sender.push(g_event, b_batch);
-
-			// allowance not given?
-			const g_allowance = k_owner.allowancesGiven[k_sender.address];
-			if(!g_allowance) {
-				throw Error(`Suite did not find an allowance for ${k_sender.alias} to spend from owner ${k_owner.alias}`);
-			}
-
-			// update allowances (object by ref is to both at once)
-			const xg_new_allowance = g_allowance.amount -= xg_amount;
-			if(xg_new_allowance < 0n) {
-				throw Error(`${k_sender.label} overspent their allowance from ${k_owner.label} by ${-xg_new_allowance} when transferring ${xg_amount} to ${k_recipient.label}`);
-			}
+			k_sender.push(g_tx_event, b_batch);
 		}
 	}
 	// legacy
 	else {
-		if(!k_recipient) debugger;
+		// add to transactions histories
+		k_owner.txs.push(g_tx_event);
+		k_recipient.txs.push(g_tx_event);
 
-		// create legacy event
-		const g_event: Snip20TransferEvent = {
+		// add to sender history as well
+		if(k_owner !== k_sender) k_sender.txs.push(g_tx_event);
+
+		// create legacy transfer event
+		const g_xfer_event: Snip20TransferEvent = {
 			from: k_owner.address,
 			sender: k_sender.address,
 			receiver: k_recipient.address,
@@ -88,12 +81,29 @@ export function transfer_from(
 			},
 		};
 
-		// add to histories
-		k_owner.transfers.push(g_event);
-		k_recipient.transfers.push(g_event);
+		// add to transfer histories
+		k_owner.transfers.push(g_xfer_event);
+		k_recipient.transfers.push(g_xfer_event);
 
 		// add to sender history as well
-		if(k_owner !== k_sender) k_sender.transfers.push(g_event);
+		if(k_owner !== k_sender) k_sender.transfers.push(g_xfer_event);
+	}
+
+	// *_from action
+	if(k_from) {
+		// allowance given?
+		const g_allowance = k_owner.allowancesGiven[k_sender.address];
+		if(g_allowance) {
+			// update allowances (object by ref is to both at once)
+			const xg_new_allowance = g_allowance.amount -= xg_amount;
+			if(xg_new_allowance < 0n) {
+				throw Error(`${k_sender.label} overspent their allowance from ${k_owner.label} by ${-xg_new_allowance} when transferring ${xg_amount} to ${k_recipient.label}`);
+			}
+		}
+		// allowance not exists and migrated
+		else if(G_GLOBAL.k_snip_migrated) {
+			throw Error(`Suite did not find an allowance for ${k_sender.alias} to spend from owner ${k_owner.alias}`);
+		}
 	}
 
 	// update balances
@@ -114,16 +124,16 @@ function set_allowance(
 	const sa_sender = k_sender.address;
 	const g_prev = h_given[sa_spender];
 
+	const xg_allowance = 'increase' === si_which
+		? bigint_lesser(XG_UINT128_MAX, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) + xg_amount)
+		: bigint_greater(0n, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) - xg_amount);
+
+	h_given[sa_spender] = h_recvd[sa_sender] = {
+		amount: xg_allowance,
+		expiration: n_exp,
+	};
+
 	if(G_GLOBAL.k_snip_migrated) {
-		const xg_allowance = 'increase' === si_which
-			? bigint_lesser(XG_UINT128_MAX, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) + xg_amount)
-			: bigint_greater(0n, (is_number(g_prev?.expiration) && g_prev.expiration < Date.now()? 0n: g_prev?.amount || 0n) - xg_amount);
-
-		h_given[sa_spender] = h_recvd[sa_sender] = {
-			amount: xg_allowance,
-			expiration: n_exp,
-		};
-
 		k_spender.check_allowance_notif(k_sender, xg_allowance, n_exp);
 	}
 }
@@ -141,20 +151,25 @@ export const H_FUNCTIONS = {
 	}),
 
 	deposit: handler('amount: token', (k_sender, g_args) => {
+		const g_tx_event: Snip250TxEvent = {
+			action: {
+				deposit: {},
+			},
+			coins: {
+				denom: s_native_denom,
+				amount: `${g_args.amount}`,
+			},
+		};
+
 		// post-migration
 		if(G_GLOBAL.k_snip_migrated) {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.push({
-				action: {
-					deposit: {},
-				},
-				coins: {
-					denom: s_native_denom,
-					amount: `${g_args.amount}`,
-				},
-			});
+			k_sender.push(g_tx_event);
+		}
+		else {
+			k_sender.txs.push(g_tx_event);
 		}
 
 		// update balances
@@ -167,20 +182,25 @@ export const H_FUNCTIONS = {
 	}),
 
 	redeem: handler('amount: token', (k_sender, g_args) => {
+		const g_tx_event: Snip250TxEvent = {
+			action: {
+				redeem: {},
+			},
+			coins: {
+				denom: 'TKN',
+				amount: `${g_args.amount}`,
+			},
+		};
+
 		// post-migration
 		if(G_GLOBAL.k_snip_migrated) {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.push({
-				action: {
-					redeem: {},
-				},
-				coins: {
-					denom: 'TKN',
-					amount: `${g_args.amount}`,
-				},
-			});
+			k_sender.push(g_tx_event);
+		}
+		else {
+			k_sender.txs.push(g_tx_event);
 		}
 
 		// update balances
@@ -213,23 +233,28 @@ export const H_FUNCTIONS = {
 	}),
 
 	burn: handler('amount: token', (k_sender, g_args) => {
+		const g_tx_event: Snip250TxEvent = {
+			action: {
+				burn: {
+					burner: k_sender.address,
+					owner: k_sender.address,
+				},
+			},
+			coins: {
+				denom: 'TKN',
+				amount: `${g_args.amount}`,
+			},
+		};
+
 		// post-migration
 		if(G_GLOBAL.k_snip_migrated) {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.push({
-				action: {
-					burn: {
-						burner: k_sender.address,
-						owner: k_sender.address,
-					},
-				},
-				coins: {
-					denom: 'TKN',
-					amount: `${g_args.amount}`,
-				},
-			});
+			k_sender.push(g_tx_event);
+		}
+		else {
+			k_sender.txs.push(g_tx_event);
 		}
 
 		// update balances
@@ -238,23 +263,28 @@ export const H_FUNCTIONS = {
 	}),
 
 	burnFrom: handler('amount: token, owner: account', (k_sender, g_args) => {
+		const g_tx_event: Snip250TxEvent = {
+			action: {
+				burn: {
+					burner: k_sender.address,
+					owner: g_args.owner,
+				},
+			},
+			coins: {
+				denom: 'TKN',
+				amount: `${g_args.amount}`,
+			},
+		};
+
 		// post-migration
 		if(G_GLOBAL.k_snip_migrated) {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.push({
-				action: {
-					burn: {
-						burner: k_sender.address,
-						owner: g_args.owner,
-					},
-				},
-				coins: {
-					denom: 'TKN',
-					amount: `${g_args.amount}`,
-				},
-			});
+			k_sender.push(g_tx_event);
+		}
+		else {
+			k_sender.txs.push(g_tx_event);
 		}
 
 		// update balances

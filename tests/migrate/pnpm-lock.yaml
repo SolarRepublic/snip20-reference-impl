@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@solar-republic/contractor':
-        specifier: ^0.10.3
-        version: 0.10.3(@typescript-eslint/parser@8.19.0(eslint@9.17.0)(typescript@5.7.2))(eslint@9.17.0)(typescript@5.7.2)
+        specifier: ^0.10.4
+        version: 0.10.4
       '@solar-republic/cosmos-grpc':
         specifier: ^0.18.0-beta.10
         version: 0.18.0-beta.10
@@ -207,8 +207,8 @@ packages:
   '@protobufjs/utf8@1.1.0':
     resolution: {integrity: sha512-Vvn3zZrhQZkkBE8LSuW3em98c0FwgO4nxzv6OdSxPKJIEKY2bGbHn+mhGIPerzI4twdxaP8/0+06HBpwf345Lw==}
 
-  '@solar-republic/contractor@0.10.3':
-    resolution: {integrity: sha512-ggrQDiwJGhM3wy6Pr2d160uMpWwQRtXQ/EiC8He/AX9lBM7M4ukSI/cxuL6Y86GsID3vBVyz7VtymE75sFVwkQ==}
+  '@solar-republic/contractor@0.10.4':
+    resolution: {integrity: sha512-r2URAhiXlGYtHre4YIblbqi3veBaJoMhUyl/Mj2Y71BFxgASz5Fo3C2GoleB7aLwH9mOv9uFkzqPA5FfvSi7xA==}
     hasBin: true
 
   '@solar-republic/cosmos-grpc@0.18.0-beta.10':
@@ -1304,22 +1304,13 @@ snapshots:
 
   '@protobufjs/utf8@1.1.0': {}
 
-  '@solar-republic/contractor@0.10.3(@typescript-eslint/parser@8.19.0(eslint@9.17.0)(typescript@5.7.2))(eslint@9.17.0)(typescript@5.7.2)':
+  '@solar-republic/contractor@0.10.4':
     dependencies:
-      '@blake.regalia/belt': 0.52.2(@typescript-eslint/parser@8.19.0(eslint@9.17.0)(typescript@5.7.2))(eslint@9.17.0)(typescript@5.7.2)
       '@types/yargs': 17.0.33
       kleur: 4.1.5
       ts-morph: 25.0.0
       ts-toolbelt: 9.6.0
       yargs: 17.7.2
-    transitivePeerDependencies:
-      - '@typescript-eslint/parser'
-      - eslint
-      - eslint-import-resolver-typescript
-      - eslint-import-resolver-webpack
-      - supports-color
-      - ts-node
-      - typescript
 
   '@solar-republic/cosmos-grpc@0.18.0-beta.10':
     dependencies:

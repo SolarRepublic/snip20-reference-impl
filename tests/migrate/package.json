@@ -24,7 +24,7 @@
     "typescript": "^5.7.2"
   },
   "dependencies": {
-    "@solar-republic/contractor": "^0.10.3",
+    "@solar-republic/contractor": "^0.10.4",
     "@solar-republic/cosmos-grpc": "^0.18.0-beta.10",
     "@solar-republic/crypto": "^0.3.2",
     "@solar-republic/neutrino": "1.8.5",
