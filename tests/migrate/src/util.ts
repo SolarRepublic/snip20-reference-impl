@@ -12,7 +12,7 @@ export function canonicalize_json<w_type extends JsonObject | JsonArray>(w_json:
 	// each lexicographically sorted key
 	for(const si_key of keys(w_json as unknown as JsonObject).sort()) {
 		// ref its value
-		const w_value = w_json[si_key];
+		const w_value = (w_json as unknown as JsonObject)[si_key];
 
 		// set value on test object
 		h_test[si_key] = is_object(w_value)? canonicalize_json(w_value): w_value;
