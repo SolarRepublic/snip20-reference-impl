@@ -526,20 +526,12 @@ async function validate_state(b_premigrate=false) {
 				for(const [a_allowances, h_allowances, si_other, si_which] of a_pairs) {
 					// assert numbers match
 					if(a_allowances.length !== keys(h_allowances).length) {
-						debugger;
-
 						// pre-migration; remove 0-valued allowances
 						for(const g_allowance of a_allowances.slice()) {
 							if(`${0n}`=== g_allowance.allowance) {
 								remove(a_allowances, g_allowance);
 							}
 						}
-
-						// for(const [sa_other, g_allowance] of entries(h_allowances)) {
-						// 	if(0n === g_allowance.amount) {
-						// 		delete h_allowances[sa_other];
-						// 	}
-						// }
 
 						// still mismatched values
 						if(a_allowances.length > keys(h_allowances).length) {
@@ -724,7 +716,7 @@ async function validate_state(b_premigrate=false) {
 				5 Carol
 				1 David
 
-		transferFrom Carol 1 Alice David  **fail insufficient allowance
+		transferFrom Carol 1 Alice David
 
 		increaseAllowance Alice 50 Carol
 
