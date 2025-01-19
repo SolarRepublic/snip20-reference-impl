@@ -113,7 +113,7 @@ export async function test_dwb(
 		let f_grant: undefined | (() => Promise<[w_result: JsonObject | undefined, a2_result?: any, a6_response?: TxResponseTuple]>);
 
 		// number of simulations to perform
-		const N_SIMULATIONS = 1025;
+		const N_SIMULATIONS = Number(process.env['DWB_SIMULATIONS'] || 1025);
 
 		// record maximum gas used for direct transfers
 		let xg_max_gas_used_transfer = 0n;
