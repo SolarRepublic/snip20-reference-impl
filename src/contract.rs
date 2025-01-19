@@ -468,7 +468,8 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
     // Permit validated! We can now execute the query.
     match query {
         QueryWithPermit::Balance {} => {
-            if !permit.check_permission(&TokenPermissions::Balance) {
+            if !permit.check_permission(&TokenPermissions::Balance)
+                && !permit.check_permission(&TokenPermissions::Owner) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query balance, got permissions {:?}",
                     permit.params.permissions
@@ -481,7 +482,8 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             return Err(StdError::generic_err(TRANSFER_HISTORY_UNSUPPORTED_MSG));
         }
         QueryWithPermit::TransactionHistory { page, page_size } => {
-            if !permit.check_permission(&TokenPermissions::History) {
+            if !permit.check_permission(&TokenPermissions::History)
+                && !permit.check_permission(&TokenPermissions::Owner) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query history, got permissions {:?}",
                     permit.params.permissions
@@ -491,7 +493,8 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             query_transactions(deps, account, page.unwrap_or(0), page_size)
         }
         QueryWithPermit::Allowance { owner, spender } => {
-            if !permit.check_permission(&TokenPermissions::Allowance) {
+            if !permit.check_permission(&TokenPermissions::Allowance)
+                && !permit.check_permission(&TokenPermissions::Owner) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query allowance, got permissions {:?}",
                     permit.params.permissions
