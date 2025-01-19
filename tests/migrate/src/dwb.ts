@@ -1,7 +1,7 @@
 import type {SecretApp} from '@solar-republic/neutrino';
 import type {WeakSecretAccAddr} from '@solar-republic/types';
 
-import {bytes, parse_json} from '@blake.regalia/belt';
+import {bytes, parse_json, timeout} from '@blake.regalia/belt';
 import * as chai from 'chai';
 const {expect} = chai;
 
@@ -58,7 +58,18 @@ export class DwbValidator {
 		this._a_entries_prev = this._a_entries.slice();
 
 		// dump dwb contents
-		const [g_dwb_res] = await this._k_app.query('dwb', {});
+		let [g_dwb_res, xc_code, s_err] = await this._k_app.query('dwb', {});
+
+		// query error
+		if(xc_code) {
+			console.error(`While querying for dwb: ${s_err}`);
+			// retry once
+			await timeout(6e3);
+			[g_dwb_res, xc_code, s_err] = await this._k_app.query('dwb', {});
+			if(xc_code) {
+				throw Error(`While querying for dwb: ${s_err}`);
+			}
+		}
 
 		// parse
 		const {
