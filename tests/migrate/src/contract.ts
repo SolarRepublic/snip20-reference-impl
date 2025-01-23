@@ -133,13 +133,6 @@ export async function replicate_code_from_mainnet(sa_contract: WeakSecretAccAddr
 	// fetch all uploaded codes
 	const [g_codes] = await querySecretComputeCodes(P_SECRET_LCD);
 
-	// check for existing code
-	const g_code_existing = g_codes?.code_infos?.find(g => ('1' as CwUint64) === g.code_id!);
-	if(g_code_existing) {
-		console.info(`Assuming code ID 1 represents original contract`);
-		return [g_code_existing.code_id!, g_code_existing.code_hash!];
-	}
-
 	console.debug(`Asking <${P_MAINNET_LCD}> for contract info on ${sa_contract}...`);
 
 	// query mainnet for original contract's code ID
@@ -185,7 +178,7 @@ export async function preload_original_contract(
 	console.log('Code ID: '+sg_code_id);
 
 	// instantiate
-	const [[sa_snip]=[]] = await secret_contract_instantiate(k_wallet, sg_code_id!, {
+	const [[sa_snip, a2_ans]=[], [xc_code, s_err]=[]] = await secret_contract_instantiate(k_wallet, sg_code_id!, {
 		name: 'original_'+bytes_to_base64(random_bytes(6)),
 		symbol: 'TKN',
 		decimals: 6,
@@ -200,23 +193,12 @@ export async function preload_original_contract(
 			enable_burn: true,
 		},
 		supported_denoms: ['uscrt'],
-	}, 10_000_000n, [k_wallet.addr]);
+	}, 5_000_000n, [k_wallet.addr]);
 
-	// const sa_snip = await instantiate_contract(k_wallet, sg_code_id!, {
-	// 	name: 'original_'+bytes_to_base64(random_bytes(6)),
-	// 	symbol: 'TKN',
-	// 	decimals: 6,
-	// 	admin: k_wallet.addr,
-	// 	initial_balances: [],
-	// 	prng_seed: bytes_to_base64(random_32()),
-	// 	config: {
-	// 		public_total_supply: true,
-	// 		enable_deposit: true,
-	// 		enable_redeem: true,
-	// 		enable_mint: true,
-	// 		enable_burn: true,
-	// 	},
-	// });
+	// error
+	if(xc_code) {
+		throw Error(`While attempting to instantiate original contract: ${s_err}`);
+	}
 
 	// instantiate
 	// @ts-expect-error deep instantiation

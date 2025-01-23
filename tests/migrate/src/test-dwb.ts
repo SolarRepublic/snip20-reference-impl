@@ -40,7 +40,7 @@ export async function test_dwb(
 		for(const sx_line of a_lines) {
 			const [, sx_amount, si_from, si_to] = /^\s*([\d.]+)(?:\s*TKN)?\s+(\w+)(?:\s+to|\s*[-=]*>+)?\s+(\w+)\s*/.exec(sx_line)!;
 
-			const xg_amount = BigInt(BigNumber(sx_amount).shiftedBy(N_DECIMALS).toFixed(0));
+			const xg_amount = BigInt(BigNumber(sx_amount).shiftedBy(0).toFixed(0));
 
 			console.log(sx_amount, si_from, si_to);
 

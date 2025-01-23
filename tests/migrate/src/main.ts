@@ -119,7 +119,7 @@ const perform_transfer = async(
 	}, 800_000n);
 
 	// update locals
-	transfer_from(k_sender, k_recipient, xg_amount, ...a_args);
+	await transfer_from(k_sender, k_recipient, xg_amount, ...a_args);
 
 	// return results
 	return a_results;
@@ -154,7 +154,7 @@ const perform_batch_transfer_from = async(
 
 	// update locals
 	for(const [k_owner, xg_amount, k_recipient] of a_actions) {
-		transfer_from(k_eoa_a, k_recipient, xg_amount, k_owner, true);
+		await transfer_from(k_eoa_a, k_recipient, xg_amount, k_owner, true);
 	}
 
 	// return results
@@ -206,27 +206,27 @@ const s_prog_vks = [
 
 const s_prog_genesis = `
 	createViewingKey $a $a
-	deposit $a 100_000_000_000
-	transfer $a 10_000_000 Alice
+	deposit $a 150_000
+	transfer $a 10_000 Alice
 
-	deposit $b 100_000_000_000
+	deposit $b 150_000
 	createViewingKey $b $b
-	transfer $b 10_000_000 Bob
+	transfer $b 10_000 Bob
 
 	setViewingKey $c plain
-	deposit $c 100_000_000_000
-	transfer $c 10_000_000 Carol
+	deposit $c 150_000
+	transfer $c 10_000 Carol
 
-	deposit $d 100_000_000_000
-	transfer $d 10_000_000 David
+	deposit $d 150_000
+	transfer $d 10_000 David
 	setViewingKey $d plain
 
 	---
 
-	transfer $a 100_000_000 Alice
-	transfer $b 100_000_000 Bob
-	transfer $c 100_000_000 Carol
-	transfer $d 100_000_000 David
+	transfer $a 100_000 Alice
+	transfer $b 100_000 Bob
+	transfer $c 100_000 Carol
+	transfer $d 100_000 David
 
 	---
 `;
@@ -400,7 +400,7 @@ async function validate_state(b_premigrate=false) {
 
 		// assert that the SNIP balances are identical
 		if(`${xg_balance}` !== g_balance?.amount) {
-			throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}; ${a4_balance}`);
+			throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}; ${(a4_balance as any)+''}`);
 		}
 
 		// detuple history result
@@ -602,10 +602,10 @@ async function validate_state(b_premigrate=false) {
 	}
 
 	// fund all aliases
-	await bank_send(a_eoas_genesis[0], 5_000000n, a_eoas_aliased);
+	await bank_send(a_eoas_genesis[0], 10_000n, a_eoas_aliased);
 
-	// fund first 1024 numeric accounts
-	await bank_send(a_eoas_genesis[1], 5_000000n, a_eoas_numeric);
+	// fund numeric accounts
+	await bank_send(a_eoas_genesis[1], 10_000n, a_eoas_numeric);
 
 	// sign query permit for all accounts
 	await Promise.all(a_eoas.map(async(k_eoa) => {
@@ -680,9 +680,9 @@ async function validate_state(b_premigrate=false) {
 	k_eoa_d.migrate(true);
 
 	// expect genesis accounts to be refunded
-	transfer_from(k_eoa_snip, k_eoa_a, 17n, __UNDEFINED, false, true);
-	transfer_from(k_eoa_snip, k_eoa_b, 16n, __UNDEFINED, false, true);
-	transfer_from(k_eoa_snip, k_eoa_d, 15n, __UNDEFINED, false, true);
+	await transfer_from(k_eoa_snip, k_eoa_a, 17n, __UNDEFINED, false, true);
+	await transfer_from(k_eoa_snip, k_eoa_b, 16n, __UNDEFINED, false, true);
+	await transfer_from(k_eoa_snip, k_eoa_d, 15n, __UNDEFINED, false, true);
 
 	// execute some transfers out in order to settle dwb entries
 	await perform_transfer(k_wallet_a, 0n, k_eoa_b, __UNDEFINED, false, true);

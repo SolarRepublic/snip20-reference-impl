@@ -13,7 +13,7 @@ import {ExternallyOwnedAccount} from './eoa';
 
 type WithArgs<a_extra extends Array<any>, w_return=void> = (k_sender: ExternallyOwnedAccount, g_args: {
 	sender: WeakSecretAccAddr;
-}, ...a_args: a_extra) => w_return;
+}, ...a_args: a_extra) => Promisable<w_return>;
 
 type Handler = {
 	params: string;
@@ -32,11 +32,11 @@ export function handler<s_signature extends string>(
 		},
 		g_answer: ParseSignatureString<s_signature>['return'],
 		a_results: TxResponseTuple,
-	) => void,
+	) => Promisable<void>,
 	g_hooks?: {
 		before?: (k_eoa: ExternallyOwnedAccount, g_args: ParseSignatureString<s_signature>['args'] & {
 			sender: WeakSecretAccAddr;
-		}) => void;
+		}) => Promisable<any>;
 	}
 ): Handler {
 	return {
@@ -208,7 +208,7 @@ export class Evaluator {
 			};
 
 			// before hook
-			const g_extra = g_method.before?.(k_eoa, g_args_sim);
+			const g_extra = await g_method.before?.(k_eoa, g_args_sim);
 
 			// construct actual call args
 			const g_exec = {
@@ -266,7 +266,7 @@ export class Evaluator {
 					}
 
 					// succeeded; each response
-					a_responses!.forEach(([a_response], i_msg) => {
+					await Promise.all(a_responses!.map(async([a_response], i_msg) => {
 						// not a compute response
 						if(!a_response) return;
 
@@ -285,8 +285,8 @@ export class Evaluator {
 						console.log(`${g_operation.sender}.${i_msg}: ${g_operation.method}(${g_operation.args.join(', ')})`);
 
 						// call handler
-						g_method_local.handler(k_eoa, g_args_app, g_answer![keys(g_answer!)[0]] as JsonObject, a6_response);
-					});
+						await g_method_local.handler(k_eoa, g_args_app, g_answer![keys(g_answer!)[0]] as JsonObject, a6_response);
+					}));
 				}]);
 
 				// set previous sender

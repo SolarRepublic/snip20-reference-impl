@@ -4,7 +4,7 @@ import type {Dict, Nilable} from '@blake.regalia/belt';
 import type {EventUnlistener, Wallet, SecretContract} from '@solar-republic/neutrino';
 import type {Snip24QueryPermitSigned, WeakSecretAccAddr, CwSecretAccAddr} from '@solar-republic/types';
 
-import {assign, base93_to_bytes, biguint_to_bytes_be, bytes, bytes_to_base93, bytes_to_hex, concat2, crypto_random_bytes, entries, keys, remove, sha256, text_to_bytes} from '@blake.regalia/belt';
+import {assign, base93_to_bytes, biguint_to_bytes_be, bytes, bytes_to_base93, bytes_to_hex, concat2, crypto_random_bytes, entries, keys, remove, sha256, text_to_bytes, timeout} from '@blake.regalia/belt';
 import {bech32_decode, bech32_encode, pubkey_to_bech32} from '@solar-republic/crypto';
 import {subscribe_snip52_channels} from '@solar-republic/neutrino';
 import {initWasmSecp256k1} from '@solar-republic/wasm-secp256k1';
@@ -168,7 +168,7 @@ export class ExternallyOwnedAccount {
 		this.txs = [];
 	}
 
-	push(g_event: Snip250TxEvent, b_batch=false, b_eventless=false): void {
+	async push(g_event: Snip250TxEvent, b_batch=false, b_eventless=false): Promise<void> {
 		const {
 			_a_skip_recvds,
 			_a_skip_autos,
@@ -211,16 +211,32 @@ export class ExternallyOwnedAccount {
 					// remove skip if present
 					remove(_a_skip_recvds, g_event);
 
-					// find notification
-					const i_spent = _a_notifs_spent.findIndex(g => g_xfer.recipient === g.recipient && xg_amount === g.amount);
-					if(i_spent < 0) {
-						debugger;
-						const [k_eoa_sender, k_eoa_from, k_eoa_recipient] = [g_xfer.sender, g_xfer.from, g_xfer.recipient].map(sa => ExternallyOwnedAccount.at(sa));
-						throw Error(`Missing spent notification of ${k_eoa_sender.alias} sending ${xg_amount} TKN from ${k_eoa_from.alias}'s balance to ${k_eoa_recipient.alias}`);
-					}
+					// retry for some amount of time
+					const xt_started = Date.now();
+					for(;;) {
+						// find notification
+						const i_spent = _a_notifs_spent.findIndex(g => g_xfer.recipient === g.recipient && xg_amount === g.amount);
 
-					// delete it
-					_a_notifs_spent.splice(i_spent, 1);
+						// missing notification
+						if(i_spent < 0) {
+							// retried long enough
+							if(Date.now() - xt_started > 90e3) {
+								// prep error message
+								const [k_eoa_sender, k_eoa_from, k_eoa_recipient] = [g_xfer.sender, g_xfer.from, g_xfer.recipient].map(sa => ExternallyOwnedAccount.at(sa));
+								throw Error(`Missing spent notification of ${k_eoa_sender.alias} sending ${xg_amount} TKN from ${k_eoa_from.alias}'s balance to ${k_eoa_recipient.alias}`);
+							}
+
+							// wait and retry
+							await timeout(6e3);
+							continue;
+						}
+
+						// delete it
+						_a_notifs_spent.splice(i_spent, 1);
+
+						// success
+						break;
+					}
 
 					// am also sender; add event as skip
 					if(this.address === g_xfer.sender) _a_skip_autos.push(g_event);
