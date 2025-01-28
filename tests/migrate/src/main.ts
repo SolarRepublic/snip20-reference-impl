@@ -601,11 +601,15 @@ async function validate_state(b_premigrate=false) {
 		bank(k_eoa, BigInt(g_bank?.balance?.amount ?? '0'));
 	}
 
+
+	// debugger;
+	// await bank_send(a_eoas_genesis[0], 1_000_000_000n, [a_eoas_genesis[1]]);
+
 	// fund all aliases
 	await bank_send(a_eoas_genesis[0], 10_000n, a_eoas_aliased);
 
 	// fund numeric accounts
-	await bank_send(a_eoas_genesis[1], 10_000n, a_eoas_numeric);
+	await bank_send(a_eoas_genesis[1], 1_000n, a_eoas_numeric);
 
 	// sign query permit for all accounts
 	await Promise.all(a_eoas.map(async(k_eoa) => {
