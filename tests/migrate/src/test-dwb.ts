@@ -133,7 +133,7 @@ export async function test_dwb(
 			const [atu8_raw, si_txn] = await create_and_sign_tx_direct(k_wallet_b, [
 				encodeGoogleProtobufAny(
 					SI_MESSAGE_TYPE_COSMOS_BANK_MSG_SEND,
-					encodeCosmosBankMsgSend(k_wallet_b.addr, k_wallet.addr, [[`${1_000n}`, 'uscrt']])
+					encodeCosmosBankMsgSend(k_wallet_b.addr, k_wallet.addr, [[`${10_000n}`, 'uscrt']])
 				),
 			], 50_000n);
 
