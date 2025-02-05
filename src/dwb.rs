@@ -515,13 +515,13 @@ impl DelayedWriteBufferEntry {
     }
 }
 
-pub fn amount_u64(amount_spent: Option<u128>) -> StdResult<u64> {
-    let amount_spent = amount_spent.unwrap_or_default();
-    let amount_spent_u64 = amount_spent
-        .try_into()
-        .or_else(|_| return Err(StdError::generic_err("se: spent overflow")))?;
-    Ok(amount_spent_u64)
-}
+//pub fn amount_u64(amount_spent: Option<u128>) -> StdResult<u64> {
+//    let amount_spent = amount_spent.unwrap_or_default();
+//    let amount_spent_u64 = amount_spent
+//        .try_into()
+//        .or_else(|_| return Err(StdError::generic_err("se: spent overflow")))?;
+//    Ok(amount_spent_u64)
+//}
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct TxNode {

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
 use crate::{constants::{ADDRESS_BYTES_LEN, IMPOSSIBLE_ADDR}, dwb::{constant_time_if_else, constant_time_if_else_u32, TX_NODES}, legacy_state, state::{safe_add, CONFIG, INTERNAL_SECRET_SENSITIVE}, transaction_history::{store_migration_action, TRANSACTIONS}};
-use crate::dwb::{amount_u64, DelayedWriteBufferEntry, TxBundle};
+use crate::dwb::{DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
 
