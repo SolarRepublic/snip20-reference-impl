@@ -1,9 +1,9 @@
-# SNIP-25 (6 decimal) v2 migration contract
+# SNIP-25 (8-18 decimal) v2 migration contract
 
 This contract migrates the original SNIP-25 contracts on secret mainnet to version 2.0. 
 
 > [!IMPORTANT] 
-> This version is for tokens with 6 decimals only.
+> This version is for tokens with 8-18 decimals only.
 
 **Original mainnet code id:** `877`
 
