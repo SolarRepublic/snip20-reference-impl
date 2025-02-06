@@ -6,7 +6,7 @@ import type {CwUint128, WeakUintStr} from '@solar-republic/types';
 
 import {readFileSync} from 'node:fs';
 
-import {__UNDEFINED, canonicalize_json, keys, MutexPool, stringify_json} from '@blake.regalia/belt';
+import {__UNDEFINED, canonicalize_json, keys, MutexPool, stringify_json, type JsonValue} from '@blake.regalia/belt';
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
 import {destructSecretRegistrationKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/msg';
 import {querySecretRegistrationTxKey} from '@solar-republic/cosmos-grpc/secret/registration/v1beta1/query';
@@ -118,7 +118,7 @@ const perform_transfer = async(
 	}, 800_000n);
 
 	// update locals
-	transfer_from(k_sender, k_recipient, xg_amount, ...a_args);
+	await transfer_from(k_sender, k_recipient, xg_amount, ...a_args);
 
 	// return results
 	return a_results;
@@ -153,7 +153,7 @@ const perform_batch_transfer_from = async(
 
 	// update locals
 	for(const [k_owner, xg_amount, k_recipient] of a_actions) {
-		transfer_from(k_eoa_a, k_recipient, xg_amount, k_owner, true);
+		await transfer_from(k_eoa_a, k_recipient, xg_amount, k_owner, true);
 	}
 
 	// return results
@@ -398,7 +398,7 @@ async function validate_state(b_premigrate=false) {
 
 		// assert that the SNIP balances are identical
 		if(`${xg_balance}` !== g_balance?.amount) {
-			throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}; ${a4_balance}`);
+			throw Error(`Balance discrepancy for ${s_alias || sa_owner}; suite accounts for ${xg_balance} but contract reports ${g_balance?.amount}; ${stringify_json(a4_balance as unknown as JsonValue)}`);
 		}
 
 		// detuple history result
@@ -645,9 +645,9 @@ async function validate_state(b_premigrate=false) {
 	k_eoa_d.migrate(true);
 
 	// expect genesis accounts to be refunded
-	transfer_from(k_eoa_snip, k_eoa_a, 17n, __UNDEFINED, false, true);
-	transfer_from(k_eoa_snip, k_eoa_b, 16n, __UNDEFINED, false, true);
-	transfer_from(k_eoa_snip, k_eoa_d, 15n, __UNDEFINED, false, true);
+	await transfer_from(k_eoa_snip, k_eoa_a, 17n, __UNDEFINED, false, true);
+	await transfer_from(k_eoa_snip, k_eoa_b, 16n, __UNDEFINED, false, true);
+	await transfer_from(k_eoa_snip, k_eoa_d, 15n, __UNDEFINED, false, true);
 
 	// execute some transfers out in order to settle dwb entries
 	await perform_transfer(k_wallet_a, 0n, k_eoa_b, __UNDEFINED, false, true);

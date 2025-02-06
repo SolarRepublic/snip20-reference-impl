@@ -17,7 +17,7 @@ let xg_total_supply = 0n;
 // native denom
 const s_native_denom = 'uscrt';
 
-export function transfer_from(
+export async function transfer_from(
 	k_sender: ExternallyOwnedAccount,
 	k_recipient: ExternallyOwnedAccount,
 	xg_amount: bigint,
@@ -51,14 +51,14 @@ export function transfer_from(
 		};
 
 		// add to histories
-		k_owner.push(g_event, b_batch, b_eventless);
-		k_recipient.push(g_event, b_batch, b_eventless);
+		await k_owner.push(g_event, b_batch, b_eventless);
+		await k_recipient.push(g_event, b_batch, b_eventless);
 
 		// *_from action
 		if(k_from) {
 			// add to sender history as well
 			k_sender.migrate();
-			k_sender.push(g_event, b_batch);
+			await k_sender.push(g_event, b_batch);
 
 			// allowance not given?
 			const g_allowance = k_owner.allowancesGiven[k_sender.address];
@@ -140,13 +140,13 @@ export const H_FUNCTIONS = {
 		k_sender.viewingKey = g_args.key;
 	}),
 
-	deposit: handler('amount: token', (k_sender, g_args) => {
+	deposit: handler('amount: token', async(k_sender, g_args) => {
 		// post-migration
 		if(G_GLOBAL.k_snip_migrated) {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.push({
+			await k_sender.push({
 				action: {
 					deposit: {},
 				},
@@ -166,13 +166,13 @@ export const H_FUNCTIONS = {
 		}),
 	}),
 
-	redeem: handler('amount: token', (k_sender, g_args) => {
+	redeem: handler('amount: token', async(k_sender, g_args) => {
 		// post-migration
 		if(G_GLOBAL.k_snip_migrated) {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.push({
+			await k_sender.push({
 				action: {
 					redeem: {},
 				},
@@ -188,20 +188,20 @@ export const H_FUNCTIONS = {
 		bank(k_sender, g_args.amount);
 	}),
 
-	transfer: handler('amount: token, recipient: account', (k_sender, g_args, _, [,,g_meta]) => {
-		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
+	transfer: handler('amount: token, recipient: account', async(k_sender, g_args, _, [,,g_meta]) => {
+		await transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
 	}),
 
-	send: handler('amount: token, recipient: account, msg: json', (k_sender, g_args) => {
-		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
+	send: handler('amount: token, recipient: account, msg: json', async(k_sender, g_args) => {
+		await transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount);
 	}),
 
-	transferFrom: handler('amount: token, owner: account, recipient: account', (k_sender, g_args) => {
-		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount, ExternallyOwnedAccount.at(g_args.owner));
+	transferFrom: handler('amount: token, owner: account, recipient: account', async(k_sender, g_args) => {
+		await transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount, ExternallyOwnedAccount.at(g_args.owner));
 	}),
 
-	sendFrom: handler('amount: token, owner: account, recipient: account, msg: json', (k_sender, g_args) => {
-		transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount, ExternallyOwnedAccount.at(g_args.owner));
+	sendFrom: handler('amount: token, owner: account, recipient: account, msg: json', async(k_sender, g_args) => {
+		await transfer_from(k_sender, ExternallyOwnedAccount.at(g_args.recipient), g_args.amount, ExternallyOwnedAccount.at(g_args.owner));
 	}),
 
 	increaseAllowance: handler('amount: token, spender: account, expiration: timestamp', (k_sender, {spender:sa_spender, amount:xg_amount, expiration:n_exp}) => {
@@ -212,13 +212,13 @@ export const H_FUNCTIONS = {
 		set_allowance(k_sender, sa_spender, xg_amount, n_exp, 'decrease');
 	}),
 
-	burn: handler('amount: token', (k_sender, g_args) => {
+	burn: handler('amount: token', async(k_sender, g_args) => {
 		// post-migration
 		if(G_GLOBAL.k_snip_migrated) {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.push({
+			await k_sender.push({
 				action: {
 					burn: {
 						burner: k_sender.address,
@@ -237,13 +237,13 @@ export const H_FUNCTIONS = {
 		xg_total_supply -= g_args.amount;
 	}),
 
-	burnFrom: handler('amount: token, owner: account', (k_sender, g_args) => {
+	burnFrom: handler('amount: token, owner: account', async(k_sender, g_args) => {
 		// post-migration
 		if(G_GLOBAL.k_snip_migrated) {
 			k_sender.migrate();
 
 			// add tx to history
-			k_sender.push({
+			await k_sender.push({
 				action: {
 					burn: {
 						burner: k_sender.address,

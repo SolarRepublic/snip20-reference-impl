@@ -2,11 +2,12 @@ import type {DwbValidator} from './dwb';
 import type {GasChecker} from './gas-checker';
 import type {Dict, Nilable} from '@blake.regalia/belt';
 import type {SecretContractInterface} from '@solar-republic/contractor';
-import {snip24_amino_sign, type SecretApp} from '@solar-republic/neutrino';
+
 import type {CwUint128, Snip24QueryPermitSigned, WeakSecretAccAddr} from '@solar-republic/types';
 
 import {entries, stringify_json} from '@blake.regalia/belt';
 import {queryCosmosBankBalance} from '@solar-republic/cosmos-grpc/cosmos/bank/v1beta1/query';
+import {snip24_amino_sign, type SecretApp} from '@solar-republic/neutrino';
 
 import BigNumber from 'bignumber.js';
 
