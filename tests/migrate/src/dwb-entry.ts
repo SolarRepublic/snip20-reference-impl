@@ -9,7 +9,7 @@ import {H_ADDRS} from './constants';
 import {SX_ANSI_BLUE, SX_ANSI_DIM_ON, SX_ANSI_GREEN, SX_ANSI_RESET, SX_ANSI_YELLOW} from './helper';
 
 const NB_ADDR = 20;
-const NB_AMOUNT = 8;
+const NB_AMOUNT = 16;
 const NB_HEAD = 5;
 const NB_LEN = 2;
 

@@ -144,7 +144,7 @@ export async function test_dwb(
 				[g_res_increase,, [xc_code, s_err]=[]]=[],,
 			] = await Promise.all([
 				// #ts-expect-error secret app
-				transfer(k_dwbv, i_sim % 2? 1_000n: 2_000n, k_app_a, k_app_sim, k_checker),
+				transfer(k_dwbv, i_sim % 2? 100n: 200n, k_app_a, k_app_sim, k_checker),
 				broadcast_result(k_wallet, atu8_raw, si_txn),
 				f_grant?.(),
 			] as const);
@@ -163,7 +163,7 @@ export async function test_dwb(
 			// approve Alec as spender for future txs
 			f_grant = () => k_app_sim.exec('increase_allowance', {
 				spender: k_wallet_a.addr,
-				amount: `${1_000n}` as CwUint128,
+				amount: `${100n}` as CwUint128,
 			}, 60_000n);
 
 			const g_result_xfer = g_result_transfer as unknown as TransferResult;
@@ -194,7 +194,7 @@ export async function test_dwb(
 			console.log(`${si_owner} --> ${si_recipient}`);
 
 			// #ts-expect-error secret app
-			const g_result = await transfer(k_dwbv, 1_000n, k_app_owner, k_app_recipient, k_checker, k_app_a);
+			const g_result = await transfer(k_dwbv, 100n, k_app_owner, k_app_recipient, k_checker, k_app_a);
 
 			if(!k_checker) {
 				k_checker = new GasChecker(g_result.tracking, g_result.gasUsed);

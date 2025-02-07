@@ -206,7 +206,7 @@ const s_prog_vks = [
 
 const s_prog_genesis = `
 	createViewingKey $a $a
-	deposit $a 150_000
+	deposit $a 15_000_000
 	transfer $a 10_000 Alice
 
 	deposit $b 150_000
@@ -582,7 +582,7 @@ async function validate_state(b_premigrate=false) {
 
 	// upload code to chain
 	console.debug(`Uploading code...`);
-	const [sg_code_id, sb16_codehash, [, s_err]=[]] = await secret_contract_upload_code(k_wallet_a, atu8_wasm, 30_000000n);
+	const [sg_code_id, sb16_codehash, [, s_err]=[]] = await secret_contract_upload_code(k_wallet_a, atu8_wasm, 5_000000n);
 
 	// upload failed
 	if(!sg_code_id) {
