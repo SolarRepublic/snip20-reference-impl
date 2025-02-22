@@ -572,7 +572,8 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             query_list_permit_revocations(deps, account.as_str()) 
         },
         QueryWithPermit::LegacyTransferHistory { page, page_size } => {
-            if !permit.check_permission(&TokenPermissions::History) {
+            if !permit.check_permission(&TokenPermissions::History)
+                && !permit.check_permission(&TokenPermissions::Owner) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query history, got permissions {:?}",
                     permit.params.permissions
@@ -587,7 +588,8 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
             )
         },
         QueryWithPermit::LegacyTransactionHistory { page, page_size } => {
-            if !permit.check_permission(&TokenPermissions::History) {
+            if !permit.check_permission(&TokenPermissions::History) 
+                && !permit.check_permission(&TokenPermissions::Owner) {
                 return Err(StdError::generic_err(format!(
                     "No permission to query history, got permissions {:?}",
                     permit.params.permissions
