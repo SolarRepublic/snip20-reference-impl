@@ -1,7 +1,7 @@
 /// This contract implements SNIP-20 standard:
 /// https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Timestamp, Uint128, Uint64
+    entry_point, to_binary, Addr, BankMsg, Binary, BlockInfo, CanonicalAddr, Coin, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Storage, Uint128, Uint64
 };
 #[cfg(feature = "gas_evaporation")]
 use cosmwasm_std::Api;
@@ -78,12 +78,13 @@ pub fn migrate(
             symbol: constants.symbol,
             decimals: constants.decimals,
             total_supply_is_public: constants.total_supply_is_public,
-            deposit_is_enabled: true,
-            redeem_is_enabled: true,
-            mint_is_enabled: false,
-            burn_is_enabled: false,
+            deposit_is_enabled: constants.deposit_is_enabled,
+            redeem_is_enabled: constants.redeem_is_enabled,
+            mint_is_enabled: constants.mint_is_enabled,
+            burn_is_enabled: constants.burn_is_enabled,
             contract_address: env.contract.address.clone(),
-            supported_denoms: vec!["uscrt".to_string()],
+            supported_denoms: constants.supported_denoms,
+            // this field did not exist in SNIP 24
             can_modify_denoms: false,
         }
     )?;
@@ -584,7 +585,22 @@ fn permit_queries(deps: Deps, env: Env, permit: Permit, query: QueryWithPermit) 
                 page.unwrap_or(0), 
                 page_size
             )
-        }
+        },
+        QueryWithPermit::LegacyTransactionHistory { page, page_size } => {
+            if !permit.check_permission(&TokenPermissions::History) {
+                return Err(StdError::generic_err(format!(
+                    "No permission to query history, got permissions {:?}",
+                    permit.params.permissions
+                )));
+            }
+
+            query_legacy_transaction_history(
+                deps,
+                &Addr::unchecked(account), 
+                page.unwrap_or(0), 
+                page_size
+            )
+        },
     }
 }
 
@@ -644,6 +660,12 @@ pub fn viewing_keys_queries(deps: Deps, env: Env,  msg: QueryMsg) -> StdResult<B
                     page_size,
                     ..
                 } => query_legacy_transfer_history(deps, &address, page.unwrap_or(0), page_size),
+                QueryMsg::LegacyTransactionHistory { 
+                    address, 
+                    page, 
+                    page_size,
+                    ..
+                } => query_legacy_transaction_history(deps, &address, page.unwrap_or(0), page_size),
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -917,10 +939,29 @@ pub fn query_legacy_transfer_history(
     page: u32,
     page_size: u32,
 ) -> StdResult<Binary> {
-    let address = deps.api.addr_canonicalize(account.as_str()).unwrap();
-    let txs = legacy_state::get_old_transfers(deps.api, deps.storage, &address, page, page_size)?;
+    let address = deps.api.addr_canonicalize(account.as_str())?;
+    let (txs, total) = legacy_state::get_old_transfers(deps.api, deps.storage, &address, page, page_size)?;
 
-    let result = QueryAnswer::LegacyTransferHistory { txs };
+    let result = QueryAnswer::LegacyTransferHistory { 
+        txs,
+        total: Some(total), 
+    };
+    to_binary(&result)
+}
+
+pub fn query_legacy_transaction_history(
+    deps: Deps,
+    account: &Addr,
+    page: u32,
+    page_size: u32,
+) -> StdResult<Binary> {
+    let address = deps.api.addr_canonicalize(account.as_str())?;
+    let (txs, total) = legacy_state::get_old_txs(deps.api, deps.storage, &address, page, page_size)?;
+
+    let result = QueryAnswer::LegacyTransactionHistory {
+        txs,
+        total: Some(total),
+    };
     to_binary(&result)
 }
 // :: migration end

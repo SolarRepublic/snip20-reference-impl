@@ -2,7 +2,7 @@ use std::any::type_name;
 use std::convert::TryFrom;
 
 use cosmwasm_std::{
-    Api, CanonicalAddr, Coin, Addr, StdError, StdResult, Storage, Uint128,
+    Api, CanonicalAddr, Coin, Addr, StdError, StdResult, Storage,
 };
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
 use secret_toolkit::storage::Item;
@@ -12,25 +12,22 @@ use crate::{legacy_append_store::AppendStore, legacy_viewing_key}; //TypedStore,
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::msg::{status_level_to_u8, u8_to_status_level, ContractStatusLevel};
 //use crate::viewing_key::ViewingKey;
 use serde::de::DeserializeOwned;
 
-pub static CONFIG_KEY: &[u8] = b"config";
-pub const PREFIX_TXS: &[u8] = b"transfers";
+const PREFIX_TXS: &[u8] = b"transactions";
+const PREFIX_TRANSFERS: &[u8] = b"transfers";
 
 pub const KEY_CONSTANTS: &[u8] = b"constants";
 pub const KEY_TOTAL_SUPPLY: &[u8] = b"total_supply";
 pub const KEY_CONTRACT_STATUS: &[u8] = b"contract_status";
 pub const KEY_MINTERS: &[u8] = b"minters";
-pub const KEY_TX_COUNT: &[u8] = b"tx-count";
 pub const KEY_VK_SEED: &[u8] = b"vk::seed";
 
 pub static VKSEED: Item<Vec<u8>> = Item::new(KEY_VK_SEED);
 
 pub const PREFIX_CONFIG: &[u8] = b"config";
 pub const PREFIX_BALANCES: &[u8] = b"balances";
-pub const PREFIX_ALLOWANCES: &[u8] = b"allowances";
 pub const PREFIX_VIEW_KEY: &[u8] = b"viewingkey";
 pub const PREFIX_RECEIVERS: &[u8] = b"receivers";
 
@@ -45,31 +42,67 @@ pub struct Tx {
     pub sender: Addr,
     pub receiver: Addr,
     pub coins: Coin,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memo: Option<String>,
+    // The block time and block height are optional so that the JSON schema
+    // reflects that some SNIP-20 contracts may not include this info.
+    pub block_time: Option<u64>,
+    pub block_height: Option<u64>,
 }
 
-impl Tx {
-    pub fn into_stored<A: Api>(self, api: &A) -> StdResult<StoredTx> {
-        let tx = StoredTx {
-            id: self.id,
-            from: api.addr_canonicalize(self.from.as_str())?,
-            sender: api.addr_canonicalize(self.sender.as_str())?,
-            receiver: api.addr_canonicalize(self.receiver.as_str())?,
-            coins: self.coins,
-        };
-        Ok(tx)
-    }
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TxAction {
+    Transfer {
+        from: Addr,
+        sender: Addr,
+        recipient: Addr,
+    },
+    Mint {
+        minter: Addr,
+        recipient: Addr,
+    },
+    Burn {
+        burner: Addr,
+        owner: Addr,
+    },
+    Deposit {},
+    Redeem {},
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct StoredTx {
+// Note that id is a globally incrementing counter.
+// Since it's 64 bits long, even at 50 tx/s it would take
+// over 11 billion years for it to rollback. I'm pretty sure
+// we'll have bigger issues by then.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct RichTx {
     pub id: u64,
-    pub from: CanonicalAddr,
-    pub sender: CanonicalAddr,
-    pub receiver: CanonicalAddr,
+    pub action: TxAction,
     pub coins: Coin,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memo: Option<String>,
+    pub block_time: u64,
+    pub block_height: u64,
 }
 
-impl StoredTx {
+// Stored types:
+
+/// This type is the stored version of the legacy transfers
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+struct StoredLegacyTransfer {
+    id: u64,
+    from: CanonicalAddr,
+    sender: CanonicalAddr,
+    receiver: CanonicalAddr,
+    coins: Coin,
+    memo: Option<String>,
+    block_time: u64,
+    block_height: u64,
+}
+
+impl StoredLegacyTransfer {
     pub fn into_humanized(self, api: &dyn Api) -> StdResult<Tx> {
         let tx = Tx {
             id: self.id,
@@ -77,26 +110,143 @@ impl StoredTx {
             sender: api.addr_humanize(&self.sender)?,
             receiver: api.addr_humanize(&self.receiver)?,
             coins: self.coins,
+            memo: self.memo,
+            block_time: Some(self.block_time),
+            block_height: Some(self.block_height),
         };
         Ok(tx)
     }
 }
 
-pub fn get_old_transfers(
+#[derive(Clone, Copy, Debug)]
+#[repr(u8)]
+enum TxCode {
+    Transfer = 0,
+    Mint = 1,
+    Burn = 2,
+    Deposit = 3,
+    Redeem = 4,
+}
+
+impl TxCode {
+
+    fn from_u8(n: u8) -> StdResult<Self> {
+        use TxCode::*;
+        match n {
+            0 => Ok(Transfer),
+            1 => Ok(Mint),
+            2 => Ok(Burn),
+            3 => Ok(Deposit),
+            4 => Ok(Redeem),
+            other => Err(StdError::generic_err(format!(
+                "Unexpected Tx code in transaction history: {} Storage is corrupted.",
+                other
+            ))),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+struct StoredTxAction {
+    tx_type: u8,
+    address1: Option<CanonicalAddr>,
+    address2: Option<CanonicalAddr>,
+    address3: Option<CanonicalAddr>,
+}
+
+impl StoredTxAction {
+
+    fn into_humanized(self, api: &dyn Api) -> StdResult<TxAction> {
+        let transfer_addr_err = || {
+            StdError::generic_err(
+                "Missing address in stored Transfer transaction. Storage is corrupt",
+            )
+        };
+        let mint_addr_err = || {
+            StdError::generic_err("Missing address in stored Mint transaction. Storage is corrupt")
+        };
+        let burn_addr_err = || {
+            StdError::generic_err("Missing address in stored Burn transaction. Storage is corrupt")
+        };
+
+        // In all of these, we ignore fields that we don't expect to find populated
+        let action = match TxCode::from_u8(self.tx_type)? {
+            TxCode::Transfer => {
+                let from = self.address1.ok_or_else(transfer_addr_err)?;
+                let sender = self.address2.ok_or_else(transfer_addr_err)?;
+                let recipient = self.address3.ok_or_else(transfer_addr_err)?;
+                let from = api.addr_humanize(&from)?;
+                let sender = api.addr_humanize(&sender)?;
+                let recipient = api.addr_humanize(&recipient)?;
+                TxAction::Transfer {
+                    from,
+                    sender,
+                    recipient,
+                }
+            }
+            TxCode::Mint => {
+                let minter = self.address1.ok_or_else(mint_addr_err)?;
+                let recipient = self.address2.ok_or_else(mint_addr_err)?;
+                let minter = api.addr_humanize(&minter)?;
+                let recipient = api.addr_humanize(&recipient)?;
+                TxAction::Mint { minter, recipient }
+            }
+            TxCode::Burn => {
+                let burner = self.address1.ok_or_else(burn_addr_err)?;
+                let owner = self.address2.ok_or_else(burn_addr_err)?;
+                let burner = api.addr_humanize(&burner)?;
+                let owner = api.addr_humanize(&owner)?;
+                TxAction::Burn { burner, owner }
+            }
+            TxCode::Deposit => TxAction::Deposit {},
+            TxCode::Redeem => TxAction::Redeem {},
+        };
+
+        Ok(action)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+struct StoredRichTx {
+    id: u64,
+    action: StoredTxAction,
+    coins: Coin,
+    memo: Option<String>,
+    block_time: u64,
+    block_height: u64,
+}
+
+impl StoredRichTx {
+    fn into_humanized(self, api: &dyn Api) -> StdResult<RichTx> {
+        Ok(RichTx {
+            id: self.id,
+            action: self.action.into_humanized(api)?,
+            coins: self.coins,
+            memo: self.memo,
+            block_time: self.block_time,
+            block_height: self.block_height,
+        })
+    }
+}
+
+pub fn get_old_txs(
     api: &dyn Api,
     storage: &dyn Storage,
     for_address: &CanonicalAddr,
     page: u32,
     page_size: u32,
-) -> StdResult<Vec<Tx>> {
+) -> StdResult<(Vec<RichTx>, u64)> {
     let store = ReadonlyPrefixedStorage::multilevel(storage, &[PREFIX_TXS, for_address.as_slice()]);
 
     // Try to access the storage of txs for the account.
     // If it doesn't exist yet, return an empty list of transfers.
-    let store = if let Some(result) = AppendStore::<StoredTx, _>::attach(&store) {
+    let store = AppendStore::<StoredRichTx, _, _>::attach(&store);
+    let store = if let Some(result) = store {
         result?
     } else {
-        return Ok(vec![]);
+        return Ok((vec![], 0));
     };
 
     // Take `page_size` txs starting from the latest tx, potentially skipping `page * page_size`
@@ -106,11 +256,46 @@ pub fn get_old_transfers(
         .rev()
         .skip((page * page_size) as _)
         .take(page_size as _);
-    // The `and_then` here flattens the `StdResult<StdResult<Tx>>` to an `StdResult<Tx>`
-    let txs: StdResult<Vec<Tx>> = tx_iter
+
+    // The `and_then` here flattens the `StdResult<StdResult<RichTx>>` to an `StdResult<RichTx>`
+    let txs: StdResult<Vec<RichTx>> = tx_iter
         .map(|tx| tx.map(|tx| tx.into_humanized(api)).and_then(|x| x))
         .collect();
-    txs
+    txs.map(|txs| (txs, store.len() as u64))
+}
+
+pub fn get_old_transfers(
+    api: &dyn Api,
+    storage: &dyn Storage,
+    for_address: &CanonicalAddr,
+    page: u32,
+    page_size: u32,
+) -> StdResult<(Vec<Tx>, u64)> {
+    let store =
+        ReadonlyPrefixedStorage::multilevel(storage, &[PREFIX_TRANSFERS, for_address.as_slice()]);
+
+    // Try to access the storage of transfers for the account.
+    // If it doesn't exist yet, return an empty list of transfers.
+    let store = AppendStore::<StoredLegacyTransfer, _, _>::attach(&store);
+    let store = if let Some(result) = store {
+        result?
+    } else {
+        return Ok((vec![], 0));
+    };
+
+    // Take `page_size` txs starting from the latest tx, potentially skipping `page * page_size`
+    // txs from the start.
+    let transfer_iter = store
+        .iter()
+        .rev()
+        .skip((page * page_size) as _)
+        .take(page_size as _);
+
+    // The `and_then` here flattens the `StdResult<StdResult<RichTx>>` to an `StdResult<RichTx>`
+    let transfers: StdResult<Vec<Tx>> = transfer_iter
+        .map(|tx| tx.map(|tx| tx.into_humanized(api)).and_then(|x| x))
+        .collect();
+    transfers.map(|txs| (txs, store.len() as u64))
 }
 
 pub fn get_all_old_transfers(
@@ -118,11 +303,13 @@ pub fn get_all_old_transfers(
     storage: &dyn Storage,
     for_address: &CanonicalAddr,
 ) -> StdResult<Vec<Tx>> {
-    let store = ReadonlyPrefixedStorage::multilevel(storage, &[PREFIX_TXS, for_address.as_slice()]);
+    let store =
+        ReadonlyPrefixedStorage::multilevel(storage, &[PREFIX_TRANSFERS, for_address.as_slice()]);
 
-    // Try to access the storage of txs for the account.
+    // Try to access the storage of transfers for the account.
     // If it doesn't exist yet, return an empty list of transfers.
-    let store = if let Some(result) = AppendStore::<StoredTx, _>::attach(&store) {
+    let store = AppendStore::<StoredLegacyTransfer, _, _>::attach(&store);
+    let store = if let Some(result) = store {
         result?
     } else {
         return Ok(vec![]);
@@ -130,14 +317,15 @@ pub fn get_all_old_transfers(
 
     // Take `page_size` txs starting from the latest tx, potentially skipping `page * page_size`
     // txs from the start.
-    let tx_iter = store
+    let transfer_iter = store
         .iter()
         .rev();
-    // The `and_then` here flattens the `StdResult<StdResult<Tx>>` to an `StdResult<Tx>`
-    let txs: StdResult<Vec<Tx>> = tx_iter
+
+    // The `and_then` here flattens the `StdResult<StdResult<RichTx>>` to an `StdResult<RichTx>`
+    let transfers: StdResult<Vec<Tx>> = transfer_iter
         .map(|tx| tx.map(|tx| tx.into_humanized(api)).and_then(|x| x))
         .collect();
-    txs
+    transfers.map(|txs| txs)
 }
 
 // Config
@@ -151,6 +339,18 @@ pub struct Constants {
     pub prng_seed: Vec<u8>,
     // privacy configuration
     pub total_supply_is_public: bool,
+    // is deposit enabled
+    pub deposit_is_enabled: bool,
+    // is redeem enabled
+    pub redeem_is_enabled: bool,
+    // is mint enabled
+    pub mint_is_enabled: bool,
+    // is burn enabled
+    pub burn_is_enabled: bool,
+    // the address of this contract, used to validate query permits
+    pub contract_address: Addr,
+    // coin denoms that are supported for deposit/redeem
+    pub supported_denoms: Vec<String>,
 }
 
 fn get_bin_data<T: DeserializeOwned>(storage: &dyn Storage, key: &[u8]) -> StdResult<T> {
@@ -197,10 +397,6 @@ pub fn get_old_contract_status(storage: &dyn Storage) -> u8 {
 
 pub fn get_old_minters(storage: &dyn Storage) -> Vec<Addr> {
 	get_bin_data(storage, KEY_MINTERS).unwrap_or_default()
-}
-
-pub fn get_old_tx_count(storage: &dyn Storage) -> u64 {
-	get_bin_data(storage, KEY_TX_COUNT).unwrap_or_default()
 }
 
 // Balances

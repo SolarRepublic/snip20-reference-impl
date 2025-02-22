@@ -1,12 +1,12 @@
-# sSCRT v2 migration contract
+# SNIP-24 (6 decimal) v2 migration contract
 
-This contract migrates the original sSCRT SNIP-20 contract to version 2.0.
+This contract migrates the original SNIP-24 contracts on secret mainnet to version 2.0.
 
-**Original mainnet code id:** `5`
+**Original mainnet code id:** `563`
 
-**Original mainnet code hash:** `af74387e276be8874f07bec3a87023ee49b0e7ebe08178c49d0a49c3c98ed60e`
+**Original mainnet code hash:** `5a085bd8ed89de92b35134ddd12505a602c7759ea25fb5c089ba03c8535b3042`
 
-## sSCRT version 2.0
+## Secret token version 2.0
 
 This is an implementation of a [SNIP-20](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-20.md), [SNIP-21](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-21.md), [SNIP-22](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-22.md), [SNIP-23](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-23.md), [SNIP-24](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-24.md), [~~SNIP-25~~](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-25.md), [SNIP-26](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-26.md), [~~SNIP-50~~](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-50.md) and [SNIP-52](https://github.com/SecretFoundation/SNIPs/blob/master/SNIP-52.md) compliant token contract.
 

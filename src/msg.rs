@@ -568,6 +568,12 @@ pub enum QueryMsg {
         page: Option<u32>,
         page_size: u32,
     },
+    LegacyTransactionHistory {
+        address: Addr,
+        key: String,
+        page: Option<u32>,
+        page_size: u32,
+    },
 
     WithPermit {
         permit: Permit,
@@ -639,6 +645,10 @@ impl QueryMsg {
                 let address = api.addr_validate(address.as_str())?;
                 Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
             }
+            Self::LegacyTransactionHistory { address, key, .. } => {
+                let address = api.addr_validate(address.as_str())?;
+                Ok((vec![address], legacy_viewing_key::ViewingKey(key.clone())))
+            }
             Self::ListPermitRevocations { viewer, .. } => {
                 let address = api.addr_validate(viewer.address.as_str())?;
                 Ok((vec![address], legacy_viewing_key::ViewingKey(viewer.viewing_key.clone())))
@@ -682,6 +692,10 @@ pub enum QueryWithPermit {
     },
     // Pre-DWB history
     LegacyTransferHistory {
+        page: Option<u32>,
+        page_size: u32,
+    },
+    LegacyTransactionHistory {
         page: Option<u32>,
         page_size: u32,
     },
@@ -768,6 +782,11 @@ pub enum QueryAnswer {
     // Pre-DWB history
     LegacyTransferHistory {
         txs: Vec<legacy_state::Tx>,
+        total: Option<u64>,
+    },
+    LegacyTransactionHistory {
+        txs: Vec<legacy_state::RichTx>,
+        total: Option<u64>,
     },
 
     #[cfg(feature = "gas_tracking")]
