@@ -19,7 +19,8 @@ type Handler = {
 	params: string;
 	handler: WithArgs<[JsonObject, TxResponseTuple]>;
 	before?: WithArgs<[], {
-		funds: bigint;
+		funds?: bigint;
+		args?: JsonObject;
 	}> | undefined;
 };
 
@@ -212,7 +213,7 @@ export class Evaluator {
 
 			// construct actual call args
 			const g_exec = {
-				[snake(si_method)]: transform_values(g_args_raw, z_value => is_number(z_value)? z_value: `${z_value}`),
+				[snake(si_method)]: transform_values({...g_args_raw, ...g_extra?.args}, z_value => is_number(z_value)? z_value: `${z_value}`),
 			};
 
 

@@ -40,7 +40,7 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0(typescript@5.7.2)
       '@solar-republic/types':
-        specifier: ^0.3.7
+        specifier: 0.3.7
         version: 0.3.7
       '@types/chai':
         specifier: ^5.0.1

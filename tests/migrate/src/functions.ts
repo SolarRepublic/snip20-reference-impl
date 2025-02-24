@@ -90,7 +90,9 @@ export async function transfer_from(
 
 		// add to histories
 		k_owner.transfers.push(g_event);
-		k_recipient.transfers.push(g_event);
+
+		// only add to recipient's history if not self
+		if(k_owner.address !== k_recipient.address) k_recipient.transfers.push(g_event);
 
 		// add to sender history as well
 		if(k_owner !== k_sender) k_sender.transfers.push(g_event);
@@ -186,6 +188,12 @@ export const H_FUNCTIONS = {
 		// update balances
 		balance(k_sender, -g_args.amount);
 		bank(k_sender, g_args.amount);
+	}, {
+		before: (k_eoa, g_args) => ({
+			args: {
+				denom: 'uscrt',
+			},
+		}),
 	}),
 
 	transfer: handler('amount: token, recipient: account', async(k_sender, g_args, _, [,,g_meta]) => {

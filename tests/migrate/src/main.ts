@@ -24,17 +24,17 @@ import {test_dwb} from './test-dwb';
 
 
 // mainnet contract token address
-const SA_MAINNET_SSCRT = 'secret1k0jntykt7e4g3y88ltc60czgjuqdy4c9e8fzek';
+const SA_MAINNET_SUSDC = 'secret1chsejpk9kfj4vt9ec6xvyguw539gsdtr775us2';
 
 // preload sSCRT
-const k_snip_original = await preload_original_contract(SA_MAINNET_SSCRT, k_wallet_a);
+const k_snip_original = await preload_original_contract(SA_MAINNET_SUSDC, k_wallet_a);
 
 // create contract eoa
 const k_eoa_snip = await ExternallyOwnedAccount.fromAddress(k_snip_original.addr, '$contract');
 
 
 /*
-available sSCRT methods:
+available sUSDC methods:
 	`redeem`,
 	`deposit`,
 	`transfer`,
@@ -422,6 +422,7 @@ async function validate_state(b_premigrate=false) {
 
 			// not found
 			if(i_xfer < 0) {
+				debugger;
 				throw Error('Failed to find transfer event locally');
 			}
 

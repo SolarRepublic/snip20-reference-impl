@@ -14,7 +14,7 @@
     "@blake.regalia/belt": "^0.52.2",
     "@blake.regalia/eslint-config-elite": "^0.5.11",
     "@blake.regalia/tsconfig": "^0.2.0",
-    "@solar-republic/types": "^0.3.7",
+    "@solar-republic/types": "0.3.7",
     "@types/chai": "^5.0.1",
     "@types/node": "^22.10.5",
     "chai": "^5.1.2",
