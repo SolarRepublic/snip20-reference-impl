@@ -133,13 +133,6 @@ export async function replicate_code_from_mainnet(sa_contract: WeakSecretAccAddr
 	// fetch all uploaded codes
 	const [g_codes] = await querySecretComputeCodes(P_SECRET_LCD);
 
-	// check for existing code
-	const g_code_existing = g_codes?.code_infos?.find(g => ('1' as CwUint64) === g.code_id!);
-	if(g_code_existing) {
-		console.info(`Assuming code ID 1 represents original contract`);
-		return [g_code_existing.code_id!, g_code_existing.code_hash!];
-	}
-
 	console.debug(`Asking <${P_MAINNET_LCD}> for contract info on ${sa_contract}...`);
 
 	// query mainnet for original contract's code ID
