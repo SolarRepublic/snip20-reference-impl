@@ -1619,6 +1619,9 @@ fn try_deposit(
 
     let mut amount = Uint128::zero();
 
+    // use the first denom given for tx record
+    let denom = &info.funds[0].denom;
+
     for coin in &info.funds {
         if constants.supported_denoms.contains(&coin.denom) {
             amount += coin.amount
@@ -1656,7 +1659,7 @@ fn try_deposit(
         rng,
         &sender_address,
         raw_amount,
-        "uscrt".to_string(),
+        denom.to_string(),
         &env.block,
         #[cfg(feature = "gas_tracking")]
         &mut tracker,
