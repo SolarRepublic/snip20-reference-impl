@@ -1,4 +1,4 @@
-# SNIP-24 (6 decimal) v2 migration contract
+# SNIP-24 (10-18 decimal) v2 migration contract
 
 This contract migrates the original SNIP-24 contracts on secret mainnet to version 2.0.
 
