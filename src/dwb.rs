@@ -11,7 +11,7 @@ use crate::btbe::{settle_dwb_entry, stored_balance};
 use crate::gas_tracker::GasTracker;
 #[cfg(feature = "gas_tracking")]
 use crate::msg::QueryAnswer;
-use crate::state::{safe_add, safe_add_u64};
+use crate::state::safe_add;
 use crate::transaction_history::{Tx, TRANSACTIONS};
 #[cfg(feature = "gas_tracking")]
 use cosmwasm_std::{to_binary, Binary};
@@ -316,7 +316,7 @@ const U128_BYTES: usize = 16;
 const DWB_RECIPIENT_BYTES: usize = 54; // because mock_api creates rando canonical addr that is 54 bytes long
 #[cfg(not(test))]
 const DWB_RECIPIENT_BYTES: usize = 20;
-const DWB_AMOUNT_BYTES: usize = 8; // Max 16 (u128)
+const DWB_AMOUNT_BYTES: usize = 16; // Max 16 (u128)
 const DWB_HEAD_NODE_BYTES: usize = 5; // Max 8  (u64)
 const DWB_LIST_LEN_BYTES: usize = 2; // u16
 
@@ -377,17 +377,17 @@ impl DelayedWriteBufferEntry {
         Ok(())
     }
 
-    pub fn amount(&self) -> StdResult<u64> {
+    pub fn amount(&self) -> StdResult<u128> {
         let start = DWB_RECIPIENT_BYTES;
         let end = start + DWB_AMOUNT_BYTES;
         let amount_slice = &self.0[start..end];
         let result = amount_slice
             .try_into()
             .or(Err(StdError::generic_err("Get dwb amount error")))?;
-        Ok(u64::from_be_bytes(result))
+        Ok(u128::from_be_bytes(result))
     }
 
-    fn set_amount(&mut self, val: u64) -> StdResult<()> {
+    fn set_amount(&mut self, val: u128) -> StdResult<()> {
         let start = DWB_RECIPIENT_BYTES;
         let end = start + DWB_AMOUNT_BYTES;
         self.0[start..end].copy_from_slice(&val.to_be_bytes());
@@ -451,23 +451,13 @@ impl DelayedWriteBufferEntry {
 
     // adds some amount to the total amount for all txs in the entry linked list
     // returns: the new amount
-    fn add_amount(&mut self, add_tx_amount: u128) -> StdResult<u64> {
-        // change this to safe_add if your coin needs to store amount in buffer as u128 (e.g. 18 decimals)
+    fn add_amount(&mut self, add_tx_amount: u128) -> StdResult<u128> {
         let mut amount = self.amount()?;
-        let add_tx_amount_u64 = amount_u64(Some(add_tx_amount))?;
-        safe_add_u64(&mut amount, add_tx_amount_u64);
+        safe_add(&mut amount, add_tx_amount);
         self.set_amount(amount)?;
 
         Ok(amount)
     }
-}
-
-pub fn amount_u64(amount_spent: Option<u128>) -> StdResult<u64> {
-    let amount_spent = amount_spent.unwrap_or_default();
-    let amount_spent_u64 = amount_spent
-        .try_into()
-        .map_err(|_| StdError::generic_err("se: spent overflow"))?;
-    Ok(amount_spent_u64)
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
@@ -595,7 +585,7 @@ mod tests {
             dwb_entry.recipient().unwrap(),
             CanonicalAddr::from(ZERO_ADDR)
         );
-        assert_eq!(dwb_entry.amount().unwrap(), 0u64);
+        assert_eq!(dwb_entry.amount().unwrap(), 0u128);
         assert_eq!(dwb_entry.head_node().unwrap(), 0u64);
         assert_eq!(dwb_entry.list_len().unwrap(), 0u16);
 
@@ -609,7 +599,7 @@ mod tests {
             dwb_entry.recipient().unwrap(),
             CanonicalAddr::from(&[1u8; DWB_RECIPIENT_BYTES])
         );
-        assert_eq!(dwb_entry.amount().unwrap(), 1u64);
+        assert_eq!(dwb_entry.amount().unwrap(), 1u128);
         assert_eq!(dwb_entry.head_node().unwrap(), 1u64);
         assert_eq!(dwb_entry.list_len().unwrap(), 1u16);
 

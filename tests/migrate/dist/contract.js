@@ -1,0 +1,119 @@
+import { __UNDEFINED, base64_to_bytes, bytes_to_base64, bytes_to_hex, bytes_to_text, sha256 } from '@blake.regalia/belt';
+import { encodeGoogleProtobufAny } from '@solar-republic/cosmos-grpc/google/protobuf/any';
+import { encodeSecretComputeMsgMigrateContract, SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_MIGRATE_CONTRACT } from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/msg';
+import { querySecretComputeCode, querySecretComputeCodes, querySecretComputeContractInfo } from '@solar-republic/cosmos-grpc/secret/compute/v1beta1/query';
+import { random_bytes } from '@solar-republic/crypto';
+import { SecretContract, TendermintEventFilter, broadcast_result, create_and_sign_tx_direct, random_32, secret_contract_instantiate, secret_contract_upload_code } from '@solar-republic/neutrino';
+import { P_SECRET_LCD, P_SECRET_RPC, k_wallet_a, P_MAINNET_LCD } from './constants.js';
+export const K_TEF_LOCAL = await TendermintEventFilter(P_SECRET_RPC, __UNDEFINED, () => {
+    console.error(`WebSocket error`);
+});
+console.log(`🔌 Connected to ${P_SECRET_RPC}/websocket`);
+/**
+ * Executes the given message for the given sender
+ * @param k_wallet
+ * @param atu8_msg
+ * @param xg_gas_limit
+ * @returns
+ */
+export async function exec(k_wallet, atu8_msg, xg_gas_limit) {
+    const [atu8_raw, si_txn] = await create_and_sign_tx_direct(k_wallet, [atu8_msg], xg_gas_limit);
+    return await broadcast_result(k_wallet, atu8_raw, si_txn, K_TEF_LOCAL);
+}
+/**
+ * Fetches a given contract's code from mainnet and uploads it to the local chain
+ * @param sa_contract
+ * @returns
+ */
+export async function replicate_code_from_mainnet(sa_contract) {
+    // fetch all uploaded codes
+    const [g_codes] = await querySecretComputeCodes(P_SECRET_LCD);
+    // check for existing code
+    const g_code_existing = g_codes?.code_infos?.find(g => '1' === g.code_id);
+    if (g_code_existing) {
+        console.info(`Assuming code ID 1 represents original contract`);
+        return [g_code_existing.code_id, g_code_existing.code_hash];
+    }
+    console.debug(`Asking <${P_MAINNET_LCD}> for contract info on ${sa_contract}...`);
+    // query mainnet for original contract's code ID
+    const [g_info] = await querySecretComputeContractInfo(P_MAINNET_LCD, sa_contract);
+    const sg_code_id = g_info?.contract_info?.code_id;
+    console.debug(`Downloading WASM bytecode...`);
+    // fetch the code's WASM
+    const [g_code] = await querySecretComputeCode(P_MAINNET_LCD, sg_code_id);
+    // parse base64
+    const atu8_wasm = base64_to_bytes(g_code.wasm);
+    // hash
+    const atu8_hash = await sha256(atu8_wasm);
+    const sb16_hash = bytes_to_hex(atu8_hash);
+    console.debug(`Comparing to local chain...`);
+    // already uploaded
+    const g_existing = g_codes?.code_infos?.find(g => g.code_hash === sb16_hash);
+    if (g_existing) {
+        console.info(`Found code ID ${g_existing.code_id} already uploaded to network`);
+        return [g_existing.code_id, g_existing.code_hash];
+    }
+    console.debug(`Uploading code to local chain...`);
+    // upload
+    return await secret_contract_upload_code(k_wallet_a, atu8_wasm, 30000000n);
+}
+export async function preload_original_contract(sa_contract, k_wallet) {
+    // ensure original code is available
+    const [sg_code_id] = await replicate_code_from_mainnet(sa_contract);
+    console.log('Code ID: ' + sg_code_id);
+    // instantiate
+    const [[sa_snip] = []] = await secret_contract_instantiate(k_wallet, sg_code_id, {
+        name: 'original_' + bytes_to_base64(random_bytes(6)),
+        symbol: 'TKN',
+        decimals: 6,
+        admin: k_wallet.addr,
+        initial_balances: [],
+        prng_seed: bytes_to_base64(random_32()),
+        config: {
+            public_total_supply: true,
+            enable_deposit: true,
+            enable_redeem: true,
+            enable_mint: true,
+            enable_burn: true,
+        },
+        supported_denoms: ["uscrt"],
+    }, 10000000n, [k_wallet.addr]);
+    // const sa_snip = await instantiate_contract(k_wallet, sg_code_id!, {
+    // 	name: 'original_'+bytes_to_base64(random_bytes(6)),
+    // 	symbol: 'TKN',
+    // 	decimals: 6,
+    // 	admin: k_wallet.addr,
+    // 	initial_balances: [],
+    // 	prng_seed: bytes_to_base64(random_32()),
+    // 	config: {
+    // 		public_total_supply: true,
+    // 		enable_deposit: true,
+    // 		enable_redeem: true,
+    // 		enable_mint: true,
+    // 		enable_burn: true,
+    // 	},
+    // });
+    // instantiate
+    // @ts-expect-error deep instantiation
+    return await SecretContract(k_wallet.lcd, sa_snip);
+}
+export async function migrate_contract(sa_contract, k_wallet, sg_code_id, k_wasm, sb16_codehash, g_msg = {}) {
+    // encrypt migrate message
+    const atu8_body = await k_wasm.encodeMsg(sb16_codehash, g_msg);
+    // execute migrate message
+    const [xc_code, sx_res, , g_meta, atu8_data, h_events] = await exec(k_wallet, encodeGoogleProtobufAny(SI_MESSAGE_TYPE_SECRET_COMPUTE_MSG_MIGRATE_CONTRACT, encodeSecretComputeMsgMigrateContract(k_wallet.addr, sa_contract, sg_code_id, atu8_body)), 600000n);
+    if (xc_code) {
+        const s_error = g_meta?.log ?? sx_res;
+        // encrypted error message
+        const m_response = /(\d+):(?: \w+:)*? encrypted: (.+?): (.+?) contract/.exec(s_error);
+        if (m_response) {
+            // destructure match
+            const [, s_index, sb64_encrypted, si_action] = m_response;
+            // decrypt ciphertext
+            const atu8_plaintext = await k_wasm.decrypt(base64_to_bytes(sb64_encrypted), atu8_body.slice(0, 32));
+            throw Error(`During ${si_action} action at message #${s_index}: ${bytes_to_text(atu8_plaintext)}`);
+        }
+        throw Error(s_error);
+    }
+}
+//# sourceMappingURL=contract.js.map

@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
 use crate::constants::{ADDRESS_BYTES_LEN, IMPOSSIBLE_ADDR};
-use crate::dwb::{amount_u64, constant_time_if_else_u32, DelayedWriteBufferEntry, TxBundle};
+use crate::dwb::{constant_time_if_else_u32, DelayedWriteBufferEntry, TxBundle};
 #[cfg(feature = "gas_tracking")]
 use crate::gas_tracker::GasTracker;
-use crate::state::{safe_add, safe_add_u64, INTERNAL_SECRET_SENSITIVE};
+use crate::state::{safe_add, INTERNAL_SECRET_SENSITIVE};
 
 pub const KEY_BTBE_ENTRY_HISTORY: &[u8] = b"btbe-entry-hist";
 pub const KEY_BTBE_BUCKETS_COUNT: &[u8] = b"btbe-buckets-cnt";
@@ -30,7 +30,7 @@ const U32_BYTES: usize = 4;
 const U128_BYTES: usize = 16;
 
 const BTBE_BUCKET_ADDRESS_BYTES: usize = ADDRESS_BYTES_LEN;
-const BTBE_BUCKET_BALANCE_BYTES: usize = 8; // Max 16 (u64)
+const BTBE_BUCKET_BALANCE_BYTES: usize = 16; // Max 16 (u128)
 const BTBE_BUCKET_HISTORY_BYTES: usize = 4; // Max 4  (u32)
 const BTBE_BUCKET_CACHE_BYTES: usize = 0;
 
@@ -69,7 +69,7 @@ impl StoredEntry {
     ) -> StdResult<Self> {
         let mut entry = StoredEntry::new(&dwb_entry.recipient()?)?;
 
-        let amount_spent = amount_u64(amount_spent)?;
+        let amount_spent = amount_spent.unwrap_or_default();
 
         // error should never happen because already checked in `settle_sender_or_owner_account`
         let balance = if let Some(new_balance) = dwb_entry.amount()?.checked_sub(amount_spent) {
@@ -105,17 +105,17 @@ impl StoredEntry {
         Ok(result)
     }
 
-    pub fn balance(&self) -> StdResult<u64> {
+    pub fn balance(&self) -> StdResult<u128> {
         let start = BTBE_BUCKET_ADDRESS_BYTES;
         let end = start + BTBE_BUCKET_BALANCE_BYTES;
         let amount_slice = &self.0[start..end];
         let result = amount_slice
             .try_into()
             .or(Err(StdError::generic_err("Get bucket balance error")))?;
-        Ok(u64::from_be_bytes(result))
+        Ok(u128::from_be_bytes(result))
     }
 
-    fn set_balance(&mut self, val: u64) -> StdResult<()> {
+    fn set_balance(&mut self, val: u128) -> StdResult<()> {
         let start = BTBE_BUCKET_ADDRESS_BYTES;
         let end = start + BTBE_BUCKET_BALANCE_BYTES;
         self.0[start..end].copy_from_slice(&val.to_be_bytes());
@@ -193,10 +193,10 @@ impl StoredEntry {
     ) -> StdResult<()> {
         // increase account's stored balance
         let mut balance = self.balance()?;
-        safe_add_u64(&mut balance, dwb_entry.amount()?);
+        safe_add(&mut balance, dwb_entry.amount()?);
 
         // safety check amount spent before spending from balance
-        let amount_spent = amount_u64(amount_spent)?;
+        let amount_spent = amount_spent.unwrap_or_default();
 
         // error should never happen because already checked in `settle_sender_or_owner_account`
         let balance = if let Some(new_balance) = balance.checked_sub(amount_spent) {
@@ -822,7 +822,7 @@ mod tests {
 
         let entry = StoredEntry::new(&canonical).unwrap();
         assert_eq!(entry.address().unwrap(), canonical);
-        assert_eq!(entry.balance().unwrap(), 0_u64);
+        assert_eq!(entry.balance().unwrap(), 0_u128);
 
         let dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
@@ -833,7 +833,7 @@ mod tests {
 
         let entry = StoredEntry::from(&mut deps.storage, &dwb_entry, None).unwrap();
         assert_eq!(entry.address().unwrap(), canonical);
-        assert_eq!(entry.balance().unwrap(), 0_u64);
+        assert_eq!(entry.balance().unwrap(), 0_u128);
     }
 
     #[test]
@@ -864,7 +864,7 @@ mod tests {
             let _ = entry.save_hash_cache(storage).unwrap();
 
             assert_eq!(entry.address().unwrap(), canonical);
-            assert_eq!(entry.balance().unwrap(), 0_u64);
+            assert_eq!(entry.balance().unwrap(), 0_u128);
 
             let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 
@@ -894,7 +894,7 @@ mod tests {
         let mut entry = StoredEntry::new(&canonical).unwrap();
         let _ = entry.save_hash_cache(storage);
         assert_eq!(entry.address().unwrap(), canonical);
-        assert_eq!(entry.balance().unwrap(), 0_u64);
+        assert_eq!(entry.balance().unwrap(), 0_u128);
 
         let mut dwb_entry = DelayedWriteBufferEntry::new(&canonical).unwrap();
 

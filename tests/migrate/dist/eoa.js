@@ -1,0 +1,284 @@
+import { assign, base93_to_bytes, biguint_to_bytes_be, bytes, bytes_to_base93, bytes_to_hex, concat2, crypto_random_bytes, entries, keys, remove, sha256, text_to_bytes } from '@blake.regalia/belt';
+import { bech32_decode, bech32_encode, pubkey_to_bech32 } from '@solar-republic/crypto';
+import { subscribe_snip52_channels } from '@solar-republic/neutrino';
+import { initWasmSecp256k1 } from '@solar-republic/wasm-secp256k1';
+import { atu8_sk_a, atu8_sk_b, atu8_sk_c, atu8_sk_d, SecretWallet } from './constants.js';
+import { K_TEF_LOCAL } from './contract.js';
+const H_ACCOUNT_VARS = {
+    a: atu8_sk_a,
+    b: atu8_sk_b,
+    c: atu8_sk_c,
+    d: atu8_sk_d,
+};
+const atu8_table = base93_to_bytes("bpLe3pROr=y;r&]>^7g5W|^`7Xr0#zC?]LBZoJ>0}duBd}f,7M$+gHYm:1QmoFoS}a's[hX6pmfENxu2;/3kIx.Ot]4UrJXRkVG2}LD]@d0;Khs<Kc&]L$S$SN8v]?]M]oD+qQLLt.*XSz{upl@9^YEK1`di0(}/a)1&L& 9SdCR>alzeN#a3N&:@BS4rX!R<Ly8$^4=+9OWOgPYa5M^fd;|>L8]q&rnuVVY9&i!WIGfZzF,D.#=%z,KLY6Kq.D8*8f/d&fy4^0PiYD%dM!o~W9sE**#.F-_v6q9Mj']? ;Mxy4OHDH!,jQ,nL");
+function crc8_opensafety(atu8_data, xb_checksum = 0) {
+    for (const xb_byte of atu8_data)
+        xb_checksum = atu8_table[xb_checksum ^ xb_byte];
+    return xb_checksum;
+}
+const h_cached_aliases = {};
+const h_cached_addresses = {};
+const Y_SECP256K1 = await initWasmSecp256k1();
+export class ExternallyOwnedAccount {
+    _atu8_sk;
+    _k_wallet;
+    _s_alias;
+    // create EOA from alias
+    static async fromAlias(s_alias) {
+        // check cache or create new
+        return h_cached_aliases[s_alias] ??= await (async () => {
+            // privte key
+            const atu8_sk = '$' === s_alias[0]
+                // lookup from vars
+                ? H_ACCOUNT_VARS[s_alias.slice(1)]
+                // generate secret key
+                : await sha256(text_to_bytes(s_alias));
+            // create wallet
+            const k_wallet = await SecretWallet(atu8_sk);
+            // create instance
+            return h_cached_addresses[k_wallet.addr] ??= new ExternallyOwnedAccount(atu8_sk, k_wallet, s_alias);
+        })();
+    }
+    static at(s_acc) {
+        return h_cached_addresses[s_acc] || h_cached_aliases[s_acc];
+    }
+    static async fromAddress(sa_from, s_alias) {
+        // random secret key
+        const atu8_sk = crypto_random_bytes(32);
+        // create wallet
+        const k_wallet = assign(await SecretWallet(atu8_sk), {
+            addr: sa_from,
+        });
+        // create and return instance
+        return h_cached_aliases[s_alias || sa_from] = h_cached_addresses[sa_from] = new ExternallyOwnedAccount(atu8_sk, k_wallet, s_alias);
+    }
+    _atu8_pk33;
+    _sa_addr;
+    _f_unsubscribe;
+    _a_skip_recvds = [];
+    _a_skip_autos = [];
+    _a_notifs_recvd = [];
+    _a_notifs_spent = [];
+    _a_notifs_allowances = [];
+    bank = 0n;
+    balance = 0n;
+    viewingKey = '';
+    queryPermit = null;
+    allowancesGiven = {};
+    allowancesReceived = {};
+    transfers = [];
+    txs = [];
+    constructor(_atu8_sk, _k_wallet, _s_alias = '') {
+        this._atu8_sk = _atu8_sk;
+        this._k_wallet = _k_wallet;
+        this._s_alias = _s_alias;
+        this._atu8_pk33 = Y_SECP256K1.sk_to_pk(_atu8_sk);
+        this._sa_addr = _k_wallet.addr;
+    }
+    get address() {
+        return this._sa_addr;
+    }
+    get publicKey() {
+        return this._atu8_pk33;
+    }
+    get wallet() {
+        return this._k_wallet;
+    }
+    get alias() {
+        return this._s_alias;
+    }
+    get label() {
+        return this._s_alias || this._sa_addr;
+    }
+    migrate(b_explicit = false, xg_offset = 0n) {
+        // if(b_explicit && this.txs.length) {
+        // 	throw Error(`Explicit migration should not have been allowed`);
+        // }
+        // first tx in post-migration
+        if (b_explicit || (!this.txs.length && this.transfers.length)) {
+            // ignore repeated migration
+            if (this.txs.find(g => g.action.migration))
+                return;
+            // add auto-migrate event
+            this.txs.push({
+                action: {
+                    migration: {},
+                },
+                coins: {
+                    denom: 'TKN',
+                    amount: `${this.balance + xg_offset}`,
+                },
+            });
+        }
+    }
+    push(g_event, b_batch = false, b_eventless = false) {
+        const { _a_skip_recvds, _a_skip_autos, _a_notifs_recvd, _a_notifs_spent, } = this;
+        const si_action = keys(g_event.action)[0];
+        const g_action = g_event.action[si_action];
+        const xg_amount = BigInt(g_event.coins.amount);
+        if (!b_eventless) {
+            // transfer action and not a batch transfer, check notifications
+            if ('transfer' === si_action && !b_batch) {
+                const g_xfer = g_action;
+                // this account was recipient
+                if (this.address === g_xfer.recipient && !_a_skip_recvds.includes(g_event) && !_a_skip_autos.includes(g_event)) {
+                    if (!_a_notifs_recvd.length) {
+                        debugger;
+                        throw Error(`No received notifications`);
+                    }
+                    // find notification
+                    const i_recvd = _a_notifs_recvd.findIndex(g => g_xfer.from === g.sender && xg_amount === g.amount);
+                    if (i_recvd < 0) {
+                        debugger;
+                        throw Error(`Missing received notification`);
+                    }
+                    // delete it
+                    _a_notifs_recvd.splice(i_recvd, 1);
+                    // am also owner; add event as skip
+                    if (this.address === g_xfer.from)
+                        _a_skip_recvds.push(g_event);
+                }
+                // this account was owner
+                else if (this.address === g_xfer.from && !_a_skip_autos.includes(g_event)) {
+                    // remove skip if present
+                    remove(_a_skip_recvds, g_event);
+                    // find notification
+                    const i_spent = _a_notifs_spent.findIndex(g => g_xfer.recipient === g.recipient && xg_amount === g.amount);
+                    if (i_spent < 0) {
+                        debugger;
+                        const [k_eoa_sender, k_eoa_from, k_eoa_recipient] = [g_xfer.sender, g_xfer.from, g_xfer.recipient].map(sa => ExternallyOwnedAccount.at(sa));
+                        throw Error(`Missing spent notification of ${k_eoa_sender.alias} sending ${xg_amount} TKN from ${k_eoa_from.alias}'s balance to ${k_eoa_recipient.alias}`);
+                    }
+                    // delete it
+                    _a_notifs_spent.splice(i_spent, 1);
+                    // am also sender; add event as skip
+                    if (this.address === g_xfer.sender)
+                        _a_skip_autos.push(g_event);
+                }
+            }
+        }
+        this.txs.push(g_event);
+    }
+    check_allowance_notif(k_sender, xg_amount, n_exp = 0) {
+        const { _a_notifs_allowances, } = this;
+        const i_allowance = _a_notifs_allowances.findIndex(g => g.amount === xg_amount && g.allower === k_sender.address && n_exp === g.expires);
+        if (i_allowance < 0) {
+            debugger;
+            throw Error(`Missing allowance notification`);
+        }
+        // delete
+        _a_notifs_allowances.splice(i_allowance, 1);
+    }
+    check_notifs() {
+        if (this._a_notifs_recvd.length) {
+            throw Error(`Unverified received notification`);
+        }
+        else if (this._a_notifs_spent.length) {
+            throw Error(`Unverified spent notification`);
+        }
+        else if (this._a_notifs_allowances.length) {
+            throw Error(`Unverified allowance notifications`);
+        }
+    }
+    async subscribe(k_snip) {
+        this._f_unsubscribe = await subscribe_snip52_channels(K_TEF_LOCAL, k_snip, this.queryPermit, {
+            recvd: ([xg_amount, atu8_sender]) => {
+                const k_sender = ExternallyOwnedAccount.at(bech32_encode('secret', atu8_sender));
+                this._a_notifs_recvd.push({
+                    amount: xg_amount,
+                    sender: k_sender.address,
+                });
+                console.log(`🔔 ${this.label} received ${xg_amount} TKN from ${k_sender.label}`);
+            },
+            spent: ([xg_amount, n_actions, atu8_recipient, xg_balance]) => {
+                const k_recipient = ExternallyOwnedAccount.at(bech32_encode('secret', atu8_recipient));
+                const s_outgoing = 1 === n_actions
+                    ? `to ${k_recipient.label}`
+                    : `in ${n_actions} with first recipient being ${k_recipient.label}`;
+                this._a_notifs_spent.push({
+                    amount: xg_amount,
+                    recipient: k_recipient.address,
+                });
+                console.log(`🔔 ${this.label} spent ${xg_amount} TKN ${s_outgoing}; new balance: ${xg_balance}`);
+            },
+            allowance: ([xg_amount, atu8_allower, n_expiration]) => {
+                const k_allower = ExternallyOwnedAccount.at(bech32_encode('secret', atu8_allower));
+                const s_expires = n_expiration
+                    ? `that expires ${new Date(n_expiration * 1e3).toISOString()}`
+                    : `that never expires`;
+                this._a_notifs_allowances.push({
+                    amount: xg_amount,
+                    allower: k_allower.address,
+                    expires: n_expiration,
+                });
+                console.log(`🔔 ${this.label} received an allowance for ${xg_amount} TKN from ${k_allower.label} ${s_expires}`);
+            },
+            multirecvd: (a_packet, atu8_data, g_tx, h_events) => {
+                const k_sender = ExternallyOwnedAccount.at(h_events['message.sender'][0]);
+                if (a_packet) {
+                    const [xg_flags_amount, atu8_term] = a_packet;
+                    // extract flags
+                    const b_memo_exits = xg_flags_amount & (1n << 63n);
+                    const b_sender_is_owner = xg_flags_amount & (1n << 62n);
+                    // extract amount
+                    const xg_amount = xg_flags_amount & ((1n << 62n) - 1n);
+                    const s0x_sender = bytes_to_hex(atu8_term);
+                    let s_from = '';
+                    // sender is owner
+                    if (b_sender_is_owner) {
+                        s_from = k_sender.label;
+                    }
+                    else {
+                        // find matches by comparing against each possible address
+                        const a_matches = [];
+                        for (const [sa_addr, k_eoa] of entries(h_cached_addresses)) {
+                            // bech32 decode address to bytes
+                            const atu8_addr = bech32_decode(sa_addr);
+                            // hit on sender ID
+                            if (s0x_sender === bytes_to_hex(atu8_addr.subarray(-8))) {
+                                a_matches.push(k_eoa);
+                            }
+                        }
+                        s_from = `...${s0x_sender}:[${a_matches.map(k => k.label).join(', ')}]`;
+                    }
+                    console.log(`🔔 ${this.label} received notification: ${s_from} sent ${xg_amount} TKN ${b_memo_exits ? 'WITH' : 'no'} memo; executed by ${k_sender.label}`);
+                }
+                else {
+                    console.log(`🔔 ${this.label} received notification: (?) sent (?) TKN; executed by ${k_sender.label}`);
+                }
+            },
+            multispent: (a_spent, atu8_data, g_tx, h_events) => {
+                const k_sender = ExternallyOwnedAccount.at(h_events['message.sender'][0]);
+                if (a_spent) {
+                    // destructure tuple
+                    const [xg_flags_amount, atu8_term, xg_balance] = a_spent;
+                    // extract flags
+                    const b_memo_exits = xg_flags_amount & (1n << 63n);
+                    // extract amount
+                    const xg_amount = xg_flags_amount & ((1n << 62n) - 1n);
+                    // encode recipient
+                    const s0x_recipient = bytes_to_hex(atu8_term);
+                    // find matches by comparing against each possible address
+                    const a_matches = [];
+                    for (const [sa_addr, k_eoa] of entries(h_cached_addresses)) {
+                        // bech32 decode address to bytes
+                        const atu8_addr = bech32_decode(sa_addr);
+                        // hit on sender ID
+                        if (s0x_recipient === bytes_to_hex(atu8_addr.subarray(-8))) {
+                            a_matches.push(k_eoa);
+                        }
+                    }
+                    const s_to = `...${s0x_recipient}:[${a_matches.map(k => k.label).join(', ')}]`;
+                    console.log(`🔔 ${this.label} received notification: ${k_sender.label} spent ${xg_amount} TKN => ${s_to} ${b_memo_exits ? 'WITTH' : 'no'} memo; new balance: ${xg_balance}`);
+                }
+                else {
+                    console.log(`🔔 ${this.label} received notification: ${k_sender.label} spent (?) TKN => (?)`);
+                }
+            },
+        });
+    }
+    unsubscribe() {
+        this._f_unsubscribe?.();
+    }
+}
+//# sourceMappingURL=eoa.js.map
